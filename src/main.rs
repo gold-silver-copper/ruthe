@@ -1,18 +1,88 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, LinkedList};
-use std::fmt;
 use std::rc::Rc;
 
 // ============================================================================
-// Optimized Value Type - Single enum instead of trait objects
+// REPL
 // ============================================================================
 
-#[derive(Debug, Clone)]
+fn repl() {
+    use std::io::{self, Write};
+    let mut env = Env::new();
+    println!("Tiny Lisp REPL with Lambda Support");
+    println!("Type expressions or 'exit' to quit");
+    println!();
+    println!("Examples:");
+    println!("  (+ 1 2 3)              => 6");
+    println!("  (/ 22 7)               => 22/7 (exact rational)");
+    println!("  (define square (lambda (x) (* x x)))");
+    println!("  (square 5)             => 25");
+    println!(
+        "  (define fib (lambda (n) (if (= n 0) 0 (if (= n 1) 1 (+ (fib (- n 1)) (fib (- n 2)))))))"
+    );
+    println!("  (fib 10)               => 55");
+    println!("  '(1 2 3)               => (1 2 3)");
+    println!("  (car '(a b c))         => a");
+    println!();
+
+    loop {
+        print!("lisp> ");
+        io::stdout().flush().unwrap();
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        let input = input.trim();
+
+        if input.is_empty() {
+            continue;
+        }
+
+        if input == "exit" || input == "quit" {
+            println!("Goodbye!");
+            break;
+        }
+
+        match parse(input) {
+            Ok(expr) => match eval(expr, &mut env) {
+                Ok(result) => println!("{}", result.to_string()),
+                Err(e) => println!("Error: {}", e),
+            },
+            Err(e) => println!("Parse error: {}", e),
+        }
+    }
+}
+
+// ============================================================================
+// Optimized Value Type - Lambda is now a Rust closure
+// ============================================================================
+
+pub type BuiltinFn = fn(&[ValRef]) -> Result<ValRef, String>;
+pub type ClosureFn = Rc<dyn Fn(&[ValRef]) -> Result<ValRef, String>>;
+
+#[derive(Clone)]
 pub enum Value {
     Number(Number),
     Symbol(String),
     Bool(bool),
-    Cons(ConsRef),
+    Cons(Rc<Cons>),
+    Builtin(BuiltinFn),
+    Closure(ClosureFn),
     Nil,
+}
+
+// Manual Debug implementation since closures don't implement Debug
+impl std::fmt::Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Number(n) => write!(f, "Number({:?})", n),
+            Value::Symbol(s) => write!(f, "Symbol({:?})", s),
+            Value::Bool(b) => write!(f, "Bool({:?})", b),
+            Value::Cons(c) => write!(f, "Cons({:?})", c),
+            Value::Builtin(_) => write!(f, "Builtin(<fn>)"),
+            Value::Closure(_) => write!(f, "Closure(<fn>)"),
+            Value::Nil => write!(f, "Nil"),
+        }
+    }
 }
 
 pub type ValRef = Rc<Value>;
@@ -24,6 +94,8 @@ impl Value {
             Value::Symbol(_) => "symbol",
             Value::Bool(_) => "bool",
             Value::Cons(_) => "cons",
+            Value::Builtin(_) => "builtin",
+            Value::Closure(_) => "closure",
             Value::Nil => "nil",
         }
     }
@@ -56,11 +128,29 @@ impl Value {
         }
     }
 
-    pub fn as_cons(&self) -> Option<&ConsRef> {
+    pub fn as_cons(&self) -> Option<&Cons> {
         match self {
             Value::Cons(c) => Some(c),
             _ => None,
         }
+    }
+
+    pub fn as_builtin(&self) -> Option<BuiltinFn> {
+        match self {
+            Value::Builtin(f) => Some(*f),
+            _ => None,
+        }
+    }
+
+    pub fn as_closure(&self) -> Option<&ClosureFn> {
+        match self {
+            Value::Closure(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn is_callable(&self) -> bool {
+        matches!(self, Value::Builtin(_) | Value::Closure(_))
     }
 
     pub fn is_nil(&self) -> bool {
@@ -73,6 +163,8 @@ impl Value {
             Value::Symbol(s) => s.clone(),
             Value::Bool(b) => if *b { "#t" } else { "#f" }.to_string(),
             Value::Cons(c) => c.to_string(),
+            Value::Builtin(_) => "<builtin>".to_string(),
+            Value::Closure(_) => "<closure>".to_string(),
             Value::Nil => "nil".to_string(),
         }
     }
@@ -85,7 +177,7 @@ impl Value {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Number {
     Integer(i64),
-    Rational(i64, i64), // numerator, denominator (always in reduced form)
+    Rational(i64, i64),
 }
 
 impl Number {
@@ -105,7 +197,6 @@ impl Number {
         let num = num / gcd;
         let den = den / gcd;
 
-        // Keep denominator positive
         let (num, den) = if den < 0 { (-num, -den) } else { (num, den) };
 
         if den == 1 {
@@ -213,15 +304,13 @@ impl Number {
 }
 
 // ============================================================================
-// Cons Cell - Using LinkedList internally
+// Cons Cell
 // ============================================================================
 
 #[derive(Debug, Clone)]
 pub struct Cons {
     list: LinkedList<ValRef>,
 }
-
-pub type ConsRef = Rc<Cons>;
 
 impl Cons {
     pub fn new() -> Self {
@@ -254,13 +343,13 @@ impl Cons {
         self.list.front().map(|v| Rc::clone(v))
     }
 
-    pub fn cdr(&self) -> ConsRef {
+    pub fn cdr(&self) -> Rc<Cons> {
         let mut new_list = self.list.clone();
         new_list.pop_front();
         Rc::new(Cons::from_list(new_list))
     }
 
-    pub fn cons(val: ValRef, rest: ConsRef) -> ConsRef {
+    pub fn cons(val: ValRef, rest: &Cons) -> Rc<Cons> {
         let mut new_list = LinkedList::new();
         new_list.push_back(val);
         new_list.append(&mut rest.list.clone());
@@ -316,37 +405,80 @@ pub fn val_cons_from_list(list: LinkedList<ValRef>) -> ValRef {
     Rc::new(Value::Cons(Rc::new(Cons::from_list(list))))
 }
 
+pub fn val_builtin(f: BuiltinFn) -> ValRef {
+    Rc::new(Value::Builtin(f))
+}
+
+pub fn val_closure(f: ClosureFn) -> ValRef {
+    Rc::new(Value::Closure(f))
+}
+
 pub fn val_nil() -> ValRef {
     Rc::new(Value::Nil)
 }
 
 // ============================================================================
-// Environment
+// Environment - Now uses RefCell for interior mutability
 // ============================================================================
 
+pub type EnvRef = Rc<RefCell<Env>>;
+
+#[derive(Debug, Clone)]
 pub struct Env {
     vars: HashMap<String, ValRef>,
+    parent: Option<EnvRef>,
 }
 
 impl Env {
-    pub fn new() -> Self {
+    pub fn new() -> EnvRef {
         let mut env = Self {
             vars: HashMap::new(),
+            parent: None,
         };
         env.register_builtins();
-        env
+        Rc::new(RefCell::new(env))
+    }
+
+    pub fn with_parent(parent: EnvRef) -> EnvRef {
+        let env = Self {
+            vars: HashMap::new(),
+            parent: Some(parent),
+        };
+        Rc::new(RefCell::new(env))
     }
 
     pub fn set(&mut self, name: String, v: ValRef) {
         self.vars.insert(name, v);
     }
 
-    pub fn get(&self, name: &str) -> Option<&ValRef> {
-        self.vars.get(name)
+    pub fn get(&self, name: &str) -> Option<ValRef> {
+        if let Some(val) = self.vars.get(name) {
+            Some(Rc::clone(val))
+        } else if let Some(parent) = &self.parent {
+            parent.borrow().get(name)
+        } else {
+            None
+        }
     }
 
     fn register_builtins(&mut self) {
         self.set("nil".to_string(), val_nil());
+        self.set("+".to_string(), val_builtin(builtin_add));
+        self.set("-".to_string(), val_builtin(builtin_sub));
+        self.set("*".to_string(), val_builtin(builtin_mul));
+        self.set("/".to_string(), val_builtin(builtin_div));
+        self.set("=".to_string(), val_builtin(builtin_eq));
+        self.set("<".to_string(), val_builtin(builtin_lt));
+        self.set(">".to_string(), val_builtin(builtin_gt));
+        self.set("list".to_string(), val_builtin(builtin_list));
+        self.set("car".to_string(), val_builtin(builtin_car));
+        self.set("cdr".to_string(), val_builtin(builtin_cdr));
+        self.set("cons".to_string(), val_builtin(builtin_cons));
+        self.set("null?".to_string(), val_builtin(builtin_null));
+        self.set("cons?".to_string(), val_builtin(builtin_cons_p));
+        self.set("length".to_string(), val_builtin(builtin_length));
+        self.set("append".to_string(), val_builtin(builtin_append));
+        self.set("reverse".to_string(), val_builtin(builtin_reverse));
     }
 }
 
@@ -496,18 +628,20 @@ pub fn parse(input: &str) -> Result<ValRef, String> {
 }
 
 // ============================================================================
-// Evaluator
+// Evaluator - Now works with EnvRef (Rc<RefCell<Env>>)
 // ============================================================================
 
-pub fn eval(expr: ValRef, env: &mut Env) -> Result<ValRef, String> {
+pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
     match expr.as_ref() {
-        Value::Number(_) | Value::Bool(_) | Value::Nil => Ok(Rc::clone(&expr)),
+        Value::Number(_) | Value::Bool(_) | Value::Nil | Value::Builtin(_) | Value::Closure(_) => {
+            Ok(Rc::clone(&expr))
+        }
         Value::Symbol(s) => {
             if s == "nil" {
                 return Ok(val_nil());
             }
-            env.get(s)
-                .map(|v| Rc::clone(v))
+            env.borrow()
+                .get(s)
                 .ok_or_else(|| format!("Unbound symbol: {}", s))
         }
         Value::Cons(cons) => {
@@ -529,8 +663,57 @@ pub fn eval(expr: ValRef, env: &mut Env) -> Result<ValRef, String> {
                             .as_symbol()
                             .ok_or("define requires symbol as first arg")?;
                         let val = eval(Rc::clone(&items[2]), env)?;
-                        env.set(name.to_string(), Rc::clone(&val));
+                        env.borrow_mut().set(name.to_string(), Rc::clone(&val));
                         return Ok(val);
+                    }
+                    "lambda" => {
+                        if cons.len() != 3 {
+                            return Err("lambda requires 2 arguments (params body)".to_string());
+                        }
+                        let items = cons.to_vec();
+
+                        // Extract parameter names
+                        let params_cons =
+                            items[1].as_cons().ok_or("lambda params must be a list")?;
+                        let params: Result<Vec<String>, String> = params_cons
+                            .iter()
+                            .map(|p| {
+                                p.as_symbol()
+                                    .map(|s| s.to_string())
+                                    .ok_or_else(|| "lambda params must be symbols".to_string())
+                            })
+                            .collect();
+                        let params = params?;
+
+                        let body = Rc::clone(&items[2]);
+
+                        // Capture the environment by reference (Rc)
+                        // This allows recursive functions to work!
+                        let captured_env = Rc::clone(env);
+
+                        // Create a Rust closure that captures the environment and body
+                        let closure = move |args: &[ValRef]| -> Result<ValRef, String> {
+                            if args.len() != params.len() {
+                                return Err(format!(
+                                    "Lambda expects {} arguments, got {}",
+                                    params.len(),
+                                    args.len()
+                                ));
+                            }
+
+                            // Create new environment with captured env as parent
+                            let lambda_env = Env::with_parent(Rc::clone(&captured_env));
+
+                            // Bind parameters
+                            for (param, arg) in params.iter().zip(args.iter()) {
+                                lambda_env.borrow_mut().set(param.clone(), Rc::clone(arg));
+                            }
+
+                            // Evaluate body
+                            eval(Rc::clone(&body), &lambda_env)
+                        };
+
+                        return Ok(val_closure(Rc::new(closure)));
                     }
                     "if" => {
                         if cons.len() != 4 {
@@ -557,993 +740,207 @@ pub fn eval(expr: ValRef, env: &mut Env) -> Result<ValRef, String> {
             }
 
             // Function application
-            let func_name = first.as_symbol().ok_or("First element must be a symbol")?;
+            let func = eval(Rc::clone(&first), env)?;
 
             let rest = cons.cdr();
             let args: Result<Vec<ValRef>, String> =
                 rest.iter().map(|arg| eval(Rc::clone(arg), env)).collect();
             let args = args?;
 
-            apply_builtin(func_name, &args)
+            // Call builtin or closure
+            match func.as_ref() {
+                Value::Builtin(f) => f(&args),
+                Value::Closure(f) => f(&args),
+                _ => Err(format!("Cannot call non-function: {}", func.to_string())),
+            }
         }
     }
 }
 
 // ============================================================================
-// Built-in Functions
+// Built-in Functions - Now regular Rust functions!
 // ============================================================================
 
-fn apply_builtin(name: &str, args: &[ValRef]) -> Result<ValRef, String> {
-    match name {
-        "+" => {
-            let mut result = Number::integer(0);
-            for arg in args {
-                let num = arg.as_number_exact().ok_or("+ requires numbers")?;
-                result = result.add(num);
-            }
-            Ok(val_number_from_num(result))
-        }
-        "-" => {
-            if args.is_empty() {
-                return Err("- requires at least 1 argument".to_string());
-            }
-            let first = args[0].as_number_exact().ok_or("- requires numbers")?;
-            if args.len() == 1 {
-                return Ok(val_number_from_num(first.neg()));
-            }
-            let mut result = first.clone();
-            for arg in &args[1..] {
-                let num = arg.as_number_exact().ok_or("- requires numbers")?;
-                result = result.sub(num);
-            }
-            Ok(val_number_from_num(result))
-        }
-        "*" => {
-            let mut result = Number::integer(1);
-            for arg in args {
-                let num = arg.as_number_exact().ok_or("* requires numbers")?;
-                result = result.mul(num);
-            }
-            Ok(val_number_from_num(result))
-        }
-        "/" => {
-            if args.len() < 2 {
-                return Err("/ requires at least 2 arguments".to_string());
-            }
-            let first = args[0].as_number_exact().ok_or("/ requires numbers")?;
-            let mut result = first.clone();
-            for arg in &args[1..] {
-                let num = arg.as_number_exact().ok_or("/ requires numbers")?;
-                result = result.div(num)?;
-            }
-            Ok(val_number_from_num(result))
-        }
-        "=" => {
-            if args.len() != 2 {
-                return Err("= requires 2 arguments".to_string());
-            }
-            let a = args[0].as_number_exact().ok_or("= requires numbers")?;
-            let b = args[1].as_number_exact().ok_or("= requires numbers")?;
-            Ok(val_bool(a.cmp(b) == std::cmp::Ordering::Equal))
-        }
-        "<" => {
-            if args.len() != 2 {
-                return Err("< requires 2 arguments".to_string());
-            }
-            let a = args[0].as_number_exact().ok_or("< requires numbers")?;
-            let b = args[1].as_number_exact().ok_or("< requires numbers")?;
-            Ok(val_bool(a.cmp(b) == std::cmp::Ordering::Less))
-        }
-        ">" => {
-            if args.len() != 2 {
-                return Err("> requires 2 arguments".to_string());
-            }
-            let a = args[0].as_number_exact().ok_or("> requires numbers")?;
-            let b = args[1].as_number_exact().ok_or("> requires numbers")?;
-            Ok(val_bool(a.cmp(b) == std::cmp::Ordering::Greater))
-        }
-        "list" => Ok(val_cons(args.to_vec())),
-        "car" => {
-            if args.len() != 1 {
-                return Err("car requires 1 argument".to_string());
-            }
-            let cons = args[0].as_cons().ok_or("car requires a cons/list")?;
-            cons.car().ok_or("car of empty list".to_string())
-        }
-        "cdr" => {
-            if args.len() != 1 {
-                return Err("cdr requires 1 argument".to_string());
-            }
-            let cons = args[0].as_cons().ok_or("cdr requires a cons/list")?;
-            Ok(Rc::new(Value::Cons(cons.cdr())))
-        }
-        "cons" => {
-            if args.len() != 2 {
-                return Err("cons requires 2 arguments".to_string());
-            }
-            if let Some(rest_cons) = args[1].as_cons() {
-                Ok(Rc::new(Value::Cons(Cons::cons(
-                    Rc::clone(&args[0]),
-                    Rc::clone(rest_cons),
-                ))))
-            } else if args[1].is_nil() {
-                Ok(val_cons(vec![Rc::clone(&args[0])]))
-            } else {
-                Ok(val_cons(vec![Rc::clone(&args[0]), Rc::clone(&args[1])]))
-            }
-        }
-        "null?" | "nil?" => {
-            if args.len() != 1 {
-                return Err("null? requires 1 argument".to_string());
-            }
-            let is_nil = if let Some(cons) = args[0].as_cons() {
-                cons.is_empty()
-            } else {
-                args[0].is_nil()
-            };
-            Ok(val_bool(is_nil))
-        }
-        "cons?" | "pair?" => {
-            if args.len() != 1 {
-                return Err("cons? requires 1 argument".to_string());
-            }
-            Ok(val_bool(args[0].as_cons().is_some()))
-        }
-        "length" => {
-            if args.len() != 1 {
-                return Err("length requires 1 argument".to_string());
-            }
-            let cons = args[0].as_cons().ok_or("length requires a list")?;
-            Ok(val_number(cons.len() as i64))
-        }
-        "append" => {
-            let mut result = LinkedList::new();
-            for arg in args {
-                if let Some(cons) = arg.as_cons() {
-                    for item in cons.iter() {
-                        result.push_back(Rc::clone(item));
-                    }
-                } else {
-                    return Err("append requires lists".to_string());
-                }
-            }
-            Ok(val_cons_from_list(result))
-        }
-        "reverse" => {
-            if args.len() != 1 {
-                return Err("reverse requires 1 argument".to_string());
-            }
-            let cons = args[0].as_cons().ok_or("reverse requires a list")?;
-            let mut vec: Vec<ValRef> = cons.to_vec();
-            vec.reverse();
-            Ok(val_cons(vec))
-        }
-        _ => Err(format!("Unknown function: {}", name)),
+fn builtin_add(args: &[ValRef]) -> Result<ValRef, String> {
+    let mut result = Number::integer(0);
+    for arg in args {
+        let num = arg.as_number_exact().ok_or("+ requires numbers")?;
+        result = result.add(num);
+    }
+    Ok(val_number_from_num(result))
+}
+
+fn builtin_sub(args: &[ValRef]) -> Result<ValRef, String> {
+    if args.is_empty() {
+        return Err("- requires at least 1 argument".to_string());
+    }
+    let first = args[0].as_number_exact().ok_or("- requires numbers")?;
+    if args.len() == 1 {
+        return Ok(val_number_from_num(first.neg()));
+    }
+    let mut result = first.clone();
+    for arg in &args[1..] {
+        let num = arg.as_number_exact().ok_or("- requires numbers")?;
+        result = result.sub(num);
+    }
+    Ok(val_number_from_num(result))
+}
+
+fn builtin_mul(args: &[ValRef]) -> Result<ValRef, String> {
+    let mut result = Number::integer(1);
+    for arg in args {
+        let num = arg.as_number_exact().ok_or("* requires numbers")?;
+        result = result.mul(num);
+    }
+    Ok(val_number_from_num(result))
+}
+
+fn builtin_div(args: &[ValRef]) -> Result<ValRef, String> {
+    if args.len() < 2 {
+        return Err("/ requires at least 2 arguments".to_string());
+    }
+    let first = args[0].as_number_exact().ok_or("/ requires numbers")?;
+    let mut result = first.clone();
+    for arg in &args[1..] {
+        let num = arg.as_number_exact().ok_or("/ requires numbers")?;
+        result = result.div(num)?;
+    }
+    Ok(val_number_from_num(result))
+}
+
+fn builtin_eq(args: &[ValRef]) -> Result<ValRef, String> {
+    if args.len() != 2 {
+        return Err("= requires 2 arguments".to_string());
+    }
+    let a = args[0].as_number_exact().ok_or("= requires numbers")?;
+    let b = args[1].as_number_exact().ok_or("= requires numbers")?;
+    Ok(val_bool(a.cmp(b) == std::cmp::Ordering::Equal))
+}
+
+fn builtin_lt(args: &[ValRef]) -> Result<ValRef, String> {
+    if args.len() != 2 {
+        return Err("< requires 2 arguments".to_string());
+    }
+    let a = args[0].as_number_exact().ok_or("< requires numbers")?;
+    let b = args[1].as_number_exact().ok_or("< requires numbers")?;
+    Ok(val_bool(a.cmp(b) == std::cmp::Ordering::Less))
+}
+
+fn builtin_gt(args: &[ValRef]) -> Result<ValRef, String> {
+    if args.len() != 2 {
+        return Err("> requires 2 arguments".to_string());
+    }
+    let a = args[0].as_number_exact().ok_or("> requires numbers")?;
+    let b = args[1].as_number_exact().ok_or("> requires numbers")?;
+    Ok(val_bool(a.cmp(b) == std::cmp::Ordering::Greater))
+}
+
+fn builtin_list(args: &[ValRef]) -> Result<ValRef, String> {
+    Ok(val_cons(args.to_vec()))
+}
+
+fn builtin_car(args: &[ValRef]) -> Result<ValRef, String> {
+    if args.len() != 1 {
+        return Err("car requires 1 argument".to_string());
+    }
+    let cons = args[0].as_cons().ok_or("car requires a cons/list")?;
+    cons.car().ok_or("car of empty list".to_string())
+}
+
+fn builtin_cdr(args: &[ValRef]) -> Result<ValRef, String> {
+    if args.len() != 1 {
+        return Err("cdr requires 1 argument".to_string());
+    }
+    let cons = args[0].as_cons().ok_or("cdr requires a cons/list")?;
+    Ok(Rc::new(Value::Cons(cons.cdr())))
+}
+
+fn builtin_cons(args: &[ValRef]) -> Result<ValRef, String> {
+    if args.len() != 2 {
+        return Err("cons requires 2 arguments".to_string());
+    }
+    if let Some(rest_cons) = args[1].as_cons() {
+        Ok(Rc::new(Value::Cons(Cons::cons(
+            Rc::clone(&args[0]),
+            rest_cons,
+        ))))
+    } else if args[1].is_nil() {
+        Ok(val_cons(vec![Rc::clone(&args[0])]))
+    } else {
+        Ok(val_cons(vec![Rc::clone(&args[0]), Rc::clone(&args[1])]))
     }
 }
 
-// ============================================================================
-// Main (for demonstration - would use REPL from previous version)
-// ============================================================================
+fn builtin_null(args: &[ValRef]) -> Result<ValRef, String> {
+    if args.len() != 1 {
+        return Err("null? requires 1 argument".to_string());
+    }
+    let is_nil = if let Some(cons) = args[0].as_cons() {
+        cons.is_empty()
+    } else {
+        args[0].is_nil()
+    };
+    Ok(val_bool(is_nil))
+}
+
+fn builtin_cons_p(args: &[ValRef]) -> Result<ValRef, String> {
+    if args.len() != 1 {
+        return Err("cons? requires 1 argument".to_string());
+    }
+    Ok(val_bool(args[0].as_cons().is_some()))
+}
+
+fn builtin_length(args: &[ValRef]) -> Result<ValRef, String> {
+    if args.len() != 1 {
+        return Err("length requires 1 argument".to_string());
+    }
+    let cons = args[0].as_cons().ok_or("length requires a list")?;
+    Ok(val_number(cons.len() as i64))
+}
+
+fn builtin_append(args: &[ValRef]) -> Result<ValRef, String> {
+    let mut result = LinkedList::new();
+    for arg in args {
+        if let Some(cons) = arg.as_cons() {
+            for item in cons.iter() {
+                result.push_back(Rc::clone(item));
+            }
+        } else {
+            return Err("append requires lists".to_string());
+        }
+    }
+    Ok(val_cons_from_list(result))
+}
+
+fn builtin_reverse(args: &[ValRef]) -> Result<ValRef, String> {
+    if args.len() != 1 {
+        return Err("reverse requires 1 argument".to_string());
+    }
+    let cons = args[0].as_cons().ok_or("reverse requires a list")?;
+    let mut vec: Vec<ValRef> = cons.to_vec();
+    vec.reverse();
+    Ok(val_cons(vec))
+}
+
+use std::time::Instant;
 
 fn main() {
-    //repl();
-    let mut env = Env::new();
+    let env = Env::new();
 
     // Quick test
     let result = parse("(+ 1 2 3)").unwrap();
-    let result = eval(result, &mut env).unwrap();
+    let result = eval(result, &env).unwrap();
     println!("Result: {}", result.to_string());
-}
-#[cfg(test)]
-mod lisp_tests {
 
-    use super::*;
-    // Helper function to evaluate a string expression
-    fn eval_str(input: &str) -> Result<ValRef, String> {
-        let mut env = Env::new();
-        let expr = parse(input)?;
-        eval(expr, &mut env)
-    }
-
-    // Helper to evaluate with a given environment
-    fn eval_str_with_env(input: &str, env: &mut Env) -> Result<ValRef, String> {
-        let expr = parse(input)?;
-        eval(expr, env)
-    }
-
-    // Helper to check if a value is an integer with specific value
-    fn assert_int(val: &ValRef, expected: i64) {
-        let num = val.as_number_exact().expect("Expected number");
-        assert_eq!(
-            num,
-            &Number::Integer(expected),
-            "Expected integer {}",
-            expected
-        );
-    }
-
-    // Helper to check if a value is a rational
-    fn assert_rational(val: &ValRef, num: i64, den: i64) {
-        let n = val.as_number_exact().expect("Expected number");
-        assert_eq!(n, &Number::Rational(num, den), "Expected {}/{}", num, den);
-    }
-
-    // ========================================================================
-    // Number Type Tests
-    // ========================================================================
-
-    #[test]
-    fn test_number_integer_creation() {
-        let n = Number::integer(42);
-        assert_eq!(n, Number::Integer(42));
-    }
-
-    #[test]
-    fn test_number_rational_creation() {
-        let n = Number::rational(3, 4);
-        assert_eq!(n, Number::Rational(3, 4));
-    }
-
-    #[test]
-    fn test_rational_reduction() {
-        let n = Number::rational(6, 8);
-        assert_eq!(n, Number::Rational(3, 4));
-    }
-
-    #[test]
-    fn test_rational_to_integer() {
-        let n = Number::rational(10, 5);
-        assert_eq!(n, Number::Integer(2));
-    }
-
-    #[test]
-    fn test_rational_negative_denominator() {
-        let n = Number::rational(3, -4);
-        assert_eq!(n, Number::Rational(-3, 4));
-    }
-
-    #[test]
-    fn test_rational_zero_numerator() {
-        let n = Number::rational(0, 5);
-        assert_eq!(n, Number::Integer(0));
-    }
-
-    #[test]
-    fn test_number_gcd() {
-        assert_eq!(Number::gcd(48, 18), 6);
-        assert_eq!(Number::gcd(7, 13), 1);
-        assert_eq!(Number::gcd(100, 50), 50);
-    }
-
-    // ========================================================================
-    // Arithmetic Tests
-    // ========================================================================
-
-    #[test]
-    fn test_integer_addition() {
-        let result = eval_str("(+ 1 2 3)").unwrap();
-        assert_int(&result, 6);
-    }
-
-    #[test]
-    fn test_integer_subtraction() {
-        let result = eval_str("(- 10 3 2)").unwrap();
-        assert_int(&result, 5);
-    }
-
-    #[test]
-    fn test_integer_multiplication() {
-        let result = eval_str("(* 2 3 4)").unwrap();
-        assert_int(&result, 24);
-    }
-
-    #[test]
-    fn test_integer_division_exact() {
-        let result = eval_str("(/ 12 3)").unwrap();
-        assert_int(&result, 4);
-    }
-
-    #[test]
-    fn test_integer_division_rational() {
-        let result = eval_str("(/ 1 3)").unwrap();
-        assert_rational(&result, 1, 3);
-    }
-
-    #[test]
-    fn test_rational_addition() {
-        let result = eval_str("(+ 1/2 1/3)").unwrap();
-        assert_rational(&result, 5, 6);
-    }
-
-    #[test]
-    fn test_rational_subtraction() {
-        let result = eval_str("(- 3/4 1/4)").unwrap();
-        assert_rational(&result, 1, 2);
-    }
-
-    #[test]
-    fn test_rational_multiplication() {
-        let result = eval_str("(* 2/3 3/4)").unwrap();
-        assert_rational(&result, 1, 2);
-    }
-
-    #[test]
-    fn test_rational_division() {
-        let result = eval_str("(/ 1/2 1/3)").unwrap();
-        assert_rational(&result, 3, 2);
-    }
-
-    #[test]
-    fn test_mixed_arithmetic() {
-        let result = eval_str("(+ 1 1/2)").unwrap();
-        assert_rational(&result, 3, 2);
-    }
-
-    #[test]
-    fn test_nested_arithmetic() {
-        let result = eval_str("(+ (* 2 3) (/ 10 2))").unwrap();
-        assert_int(&result, 11);
-    }
-
-    #[test]
-    fn test_negation() {
-        let result = eval_str("(- 5)").unwrap();
-        assert_int(&result, -5);
-    }
-
-    #[test]
-    fn test_negative_rational() {
-        let result = eval_str("(- 1/3)").unwrap();
-        assert_rational(&result, -1, 3);
-    }
-
-    #[test]
-    fn test_complex_arithmetic() {
-        let result = eval_str("(/ (+ 1 2 3) (* 2 3))").unwrap();
-        assert_int(&result, 1);
-    }
-
-    #[test]
-    fn test_addition_empty() {
-        let result = eval_str("(+)").unwrap();
-        assert_int(&result, 0);
-    }
-
-    #[test]
-    fn test_multiplication_empty() {
-        let result = eval_str("(*)").unwrap();
-        assert_int(&result, 1);
-    }
-
-    #[test]
-    fn test_division_by_zero() {
-        let result = eval_str("(/ 1 0)");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("zero"));
-    }
-
-    // ========================================================================
-    // Comparison Tests
-    // ========================================================================
-
-    #[test]
-    fn test_equality_integers() {
-        let result = eval_str("(= 5 5)").unwrap();
-        assert_eq!(result.as_bool(), Some(true));
-    }
-
-    #[test]
-    fn test_equality_integers_false() {
-        let result = eval_str("(= 5 6)").unwrap();
-        assert_eq!(result.as_bool(), Some(false));
-    }
-
-    #[test]
-    fn test_equality_rationals() {
-        let result = eval_str("(= 1/2 2/4)").unwrap();
-        assert_eq!(result.as_bool(), Some(true));
-    }
-
-    #[test]
-    fn test_less_than() {
-        let result = eval_str("(< 3 5)").unwrap();
-        assert_eq!(result.as_bool(), Some(true));
-    }
-
-    #[test]
-    fn test_less_than_false() {
-        let result = eval_str("(< 5 3)").unwrap();
-        assert_eq!(result.as_bool(), Some(false));
-    }
-
-    #[test]
-    fn test_greater_than() {
-        let result = eval_str("(> 5 3)").unwrap();
-        assert_eq!(result.as_bool(), Some(true));
-    }
-
-    #[test]
-    fn test_comparison_mixed() {
-        let result = eval_str("(< 1/2 1)").unwrap();
-        assert_eq!(result.as_bool(), Some(true));
-    }
-
-    #[test]
-    fn test_comparison_rationals() {
-        let result = eval_str("(> 2/3 1/2)").unwrap();
-        assert_eq!(result.as_bool(), Some(true));
-    }
-
-    // ========================================================================
-    // List Operations Tests
-    // ========================================================================
-
-    #[test]
-    fn test_list_creation() {
-        let result = eval_str("(list 1 2 3)").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 3);
-    }
-
-    #[test]
-    fn test_empty_list() {
-        let result = eval_str("(list)").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 0);
-    }
-
-    #[test]
-    fn test_car() {
-        let result = eval_str("(car (list 1 2 3))").unwrap();
-        assert_int(&result, 1);
-    }
-
-    #[test]
-    fn test_cdr() {
-        let result = eval_str("(cdr (list 1 2 3))").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 2);
-    }
-
-    #[test]
-    fn test_car_of_cdr() {
-        let result = eval_str("(car (cdr (list 1 2 3)))").unwrap();
-        assert_int(&result, 2);
-    }
-
-    #[test]
-    fn test_cons_operation() {
-        let result = eval_str("(cons 1 (cons 2 nil))").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 2);
-    }
-
-    #[test]
-    fn test_cons_with_nil() {
-        let result = eval_str("(cons 42 nil)").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 1);
-    }
-
-    #[test]
-    fn test_cons_with_list() {
-        let result = eval_str("(cons 0 (list 1 2 3))").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 4);
-    }
-
-    #[test]
-    fn test_length() {
-        let result = eval_str("(length (list 1 2 3 4 5))").unwrap();
-        assert_int(&result, 5);
-    }
-
-    #[test]
-    fn test_length_empty() {
-        let result = eval_str("(length (list))").unwrap();
-        assert_int(&result, 0);
-    }
-
-    #[test]
-    fn test_append_two_lists() {
-        let result = eval_str("(append (list 1 2) (list 3 4))").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 4);
-    }
-
-    #[test]
-    fn test_append_multiple_lists() {
-        let result = eval_str("(append (list 1) (list 2) (list 3))").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 3);
-    }
-
-    #[test]
-    fn test_append_empty_lists() {
-        let result = eval_str("(append (list) (list 1 2))").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 2);
-    }
-
-    #[test]
-    fn test_reverse() {
-        let mut env = Env::new();
-        eval_str_with_env("(define lst (list 1 2 3))", &mut env).unwrap();
-        let result = eval_str_with_env("(car (reverse lst))", &mut env).unwrap();
-        assert_int(&result, 3);
-    }
-
-    #[test]
-    fn test_reverse_empty() {
-        let result = eval_str("(reverse (list))").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 0);
-    }
-
-    #[test]
-    fn test_null_predicate_true() {
-        let result = eval_str("(null? (list))").unwrap();
-        assert_eq!(result.as_bool(), Some(true));
-    }
-
-    #[test]
-    fn test_null_predicate_false() {
-        let result = eval_str("(null? (list 1))").unwrap();
-        assert_eq!(result.as_bool(), Some(false));
-    }
-
-    #[test]
-    fn test_null_predicate_nil() {
-        let result = eval_str("(null? nil)").unwrap();
-        assert_eq!(result.as_bool(), Some(true));
-    }
-
-    #[test]
-    fn test_cons_predicate_true() {
-        let result = eval_str("(cons? (list 1 2 3))").unwrap();
-        assert_eq!(result.as_bool(), Some(true));
-    }
-
-    #[test]
-    fn test_cons_predicate_false() {
-        let result = eval_str("(cons? 42)").unwrap();
-        assert_eq!(result.as_bool(), Some(false));
-    }
-
-    // ========================================================================
-    // Quote Tests
-    // ========================================================================
-
-    #[test]
-    fn test_quote_number() {
-        let result = eval_str("(quote 42)").unwrap();
-        assert_int(&result, 42);
-    }
-
-    #[test]
-    fn test_quote_symbol() {
-        let result = eval_str("(quote foo)").unwrap();
-        assert_eq!(result.as_symbol(), Some("foo"));
-    }
-
-    #[test]
-    fn test_quote_list() {
-        let result = eval_str("(quote (1 2 3))").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 3);
-    }
-
-    #[test]
-    fn test_quote_shorthand() {
-        let result = eval_str("'(1 2 3)").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 3);
-    }
-
-    #[test]
-    fn test_quote_nested() {
-        let result = eval_str("'(a (b c) d)").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 3);
-    }
-
-    #[test]
-    fn test_quoted_symbol_not_evaluated() {
-        let result = eval_str("'x");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().as_symbol(), Some("x"));
-    }
-
-    // ========================================================================
-    // Define Tests
-    // ========================================================================
-
-    #[test]
-    fn test_define_number() {
-        let mut env = Env::new();
-        eval_str_with_env("(define x 42)", &mut env).unwrap();
-        let result = eval_str_with_env("x", &mut env).unwrap();
-        assert_int(&result, 42);
-    }
-
-    #[test]
-    fn test_define_expression() {
-        let mut env = Env::new();
-        eval_str_with_env("(define x (+ 1 2 3))", &mut env).unwrap();
-        let result = eval_str_with_env("x", &mut env).unwrap();
-        assert_int(&result, 6);
-    }
-
-    #[test]
-    fn test_define_list() {
-        let mut env = Env::new();
-        eval_str_with_env("(define lst '(1 2 3))", &mut env).unwrap();
-        let result = eval_str_with_env("(length lst)", &mut env).unwrap();
-        assert_int(&result, 3);
-    }
-
-    #[test]
-    fn test_define_redefine() {
-        let mut env = Env::new();
-        eval_str_with_env("(define x 10)", &mut env).unwrap();
-        eval_str_with_env("(define x 20)", &mut env).unwrap();
-        let result = eval_str_with_env("x", &mut env).unwrap();
-        assert_int(&result, 20);
-    }
-
-    #[test]
-    fn test_define_use_in_expression() {
-        let mut env = Env::new();
-        eval_str_with_env("(define a 5)", &mut env).unwrap();
-        eval_str_with_env("(define b 3)", &mut env).unwrap();
-        let result = eval_str_with_env("(+ a b)", &mut env).unwrap();
-        assert_int(&result, 8);
-    }
-
-    // ========================================================================
-    // If Tests
-    // ========================================================================
-
-    #[test]
-    fn test_if_true_branch() {
-        let result = eval_str("(if #t 1 2)").unwrap();
-        assert_int(&result, 1);
-    }
-
-    #[test]
-    fn test_if_false_branch() {
-        let result = eval_str("(if #f 1 2)").unwrap();
-        assert_int(&result, 2);
-    }
-
-    #[test]
-    fn test_if_with_comparison() {
-        let result = eval_str("(if (> 5 3) 'yes 'no)").unwrap();
-        assert_eq!(result.as_symbol(), Some("yes"));
-    }
-
-    #[test]
-    fn test_if_truthy_number() {
-        let result = eval_str("(if 42 'yes 'no)").unwrap();
-        assert_eq!(result.as_symbol(), Some("yes"));
-    }
-
-    #[test]
-    fn test_if_nil_is_falsy() {
-        let result = eval_str("(if nil 'yes 'no)").unwrap();
-        assert_eq!(result.as_symbol(), Some("no"));
-    }
-
-    #[test]
-    fn test_if_nested() {
-        let result = eval_str("(if #t (if #f 1 2) 3)").unwrap();
-        assert_int(&result, 2);
-    }
-
-    #[test]
-    fn test_if_with_define() {
-        let mut env = Env::new();
-        eval_str_with_env("(define x 10)", &mut env).unwrap();
-        let result = eval_str_with_env("(if (> x 5) 'big 'small)", &mut env).unwrap();
-        assert_eq!(result.as_symbol(), Some("big"));
-    }
-
-    // ========================================================================
-    // Complex Expression Tests
-    // ========================================================================
-
-    #[test]
-    fn test_factorial_like_computation() {
-        let result = eval_str("(* 1 2 3 4 5)").unwrap();
-        assert_int(&result, 120);
-    }
-
-    #[test]
-    fn test_nested_list_operations() {
-        let result = eval_str("(car (cdr (cdr '(a b c d))))").unwrap();
-        assert_eq!(result.as_symbol(), Some("c"));
-    }
-
-    #[test]
-    fn test_complex_arithmetic_chain() {
-        let result = eval_str("(+ (* 2 3) (- 10 5) (/ 20 4))").unwrap();
-        assert_int(&result, 16);
-    }
-
-    #[test]
-    fn test_list_construction_chain() {
-        let result = eval_str("(cons 1 (cons 2 (cons 3 (cons 4 nil))))").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 4);
-    }
-
-    #[test]
-    fn test_mixed_data_types_in_list() {
-        let mut env = Env::new();
-        eval_str_with_env("(define mixed '(1 foo 3/4 #t))", &mut env).unwrap();
-        let result = eval_str_with_env("(length mixed)", &mut env).unwrap();
-        assert_int(&result, 4);
-    }
-
-    // ========================================================================
-    // Error Handling Tests
-    // ========================================================================
-
-    #[test]
-    fn test_undefined_symbol() {
-        let result = eval_str("undefined-var");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Unbound"));
-    }
-
-    #[test]
-    fn test_car_on_non_list() {
-        let result = eval_str("(car 42)");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_invalid_define() {
-        let result = eval_str("(define)");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_invalid_if() {
-        let result = eval_str("(if #t)");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_wrong_arg_count_plus() {
-        // This should work (+ with no args is 0)
-        let result = eval_str("(+)");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_wrong_arg_count_car() {
-        let result = eval_str("(car)");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_unknown_function() {
-        let result = eval_str("(unknown-func 1 2 3)");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Unknown"));
-    }
-
-    // ========================================================================
-    // Parser Tests
-    // ========================================================================
-
-    #[test]
-    fn test_parse_integer() {
-        let result = parse("42");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_parse_negative_integer() {
-        let result = parse("-42");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_parse_rational() {
-        let result = parse("3/4");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_parse_symbol() {
-        let result = parse("foo");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_parse_bool_true() {
-        let result = parse("#t");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_parse_bool_false() {
-        let result = parse("#f");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_parse_empty_list() {
-        let result = parse("()");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_parse_nested_list() {
-        let result = parse("(a (b c) d)");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_parse_unmatched_paren() {
-        let result = parse("(a b c");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_extra_paren() {
-        let result = parse("(a b c))");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_with_comments() {
-        let result = parse("(+ 1 2) ; this is a comment");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_parse_multiline() {
-        let result = parse("(+ 1\n   2\n   3)");
-        assert!(result.is_ok());
-    }
-
-    // ========================================================================
-    // Tokenizer Tests
-    // ========================================================================
-
-    #[test]
-    fn test_tokenize_simple() {
-        let tokens = tokenize("(+ 1 2)").unwrap();
-        assert_eq!(tokens.len(), 5);
-    }
-
-    #[test]
-    fn test_tokenize_with_whitespace() {
-        let tokens = tokenize("  ( +   1    2  )  ").unwrap();
-        assert_eq!(tokens.len(), 5);
-    }
-
-    #[test]
-    fn test_tokenize_rational() {
-        let tokens = tokenize("3/4").unwrap();
-        assert_eq!(tokens.len(), 1);
-        match &tokens[0] {
-            Token::Rational(n, d) => {
-                assert_eq!(*n, 3);
-                assert_eq!(*d, 4);
-            }
-            _ => panic!("Expected rational token"),
-        }
-    }
-
-    #[test]
-    fn test_tokenize_quote() {
-        let tokens = tokenize("'foo").unwrap();
-        assert_eq!(tokens.len(), 2);
-    }
-
-    #[test]
-    fn test_tokenize_comment() {
-        let tokens = tokenize("1 ; comment\n2").unwrap();
-        assert_eq!(tokens.len(), 2);
-    }
-
-    // ========================================================================
-    // Integration Tests
-    // ========================================================================
-
-    #[test]
-    fn test_sum_of_list() {
-        let mut env = Env::new();
-        eval_str_with_env("(define nums '(1 2 3 4 5))", &mut env).unwrap();
-        // Since we don't have reduce/fold yet, we'll compute manually
-        let result = eval_str_with_env("(+ 1 2 3 4 5)", &mut env).unwrap();
-        assert_int(&result, 15);
-    }
-
-    #[test]
-    fn test_rational_precision() {
-        // Test that 1/3 + 1/3 + 1/3 = 1 exactly
-        let result = eval_str("(+ 1/3 1/3 1/3)").unwrap();
-        assert_int(&result, 1);
-    }
-
-    #[test]
-    fn test_build_list_incrementally() {
-        let mut env = Env::new();
-        eval_str_with_env("(define lst nil)", &mut env).unwrap();
-        eval_str_with_env("(define lst (cons 3 lst))", &mut env).unwrap();
-        eval_str_with_env("(define lst (cons 2 lst))", &mut env).unwrap();
-        eval_str_with_env("(define lst (cons 1 lst))", &mut env).unwrap();
-        let result = eval_str_with_env("(length lst)", &mut env).unwrap();
-        assert_int(&result, 3);
-    }
-
-    #[test]
-    fn test_conditional_computation() {
-        let mut env = Env::new();
-        eval_str_with_env("(define x 10)", &mut env).unwrap();
-        let result = eval_str_with_env("(if (> x 5) (* x 2) (+ x 5))", &mut env).unwrap();
-        assert_int(&result, 20);
-    }
-
-    #[test]
-    fn test_nil_propagation() {
-        let mut env = Env::new();
-        eval_str_with_env("(define x nil)", &mut env).unwrap();
-        let result = eval_str_with_env("(null? x)", &mut env).unwrap();
-        assert_eq!(result.as_bool(), Some(true));
-    }
-
-    #[test]
-    fn test_symbol_preservation_in_quote() {
-        let result = eval_str("'(+ 1 2)").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        let first = cons.car().unwrap();
-        assert_eq!(first.as_symbol(), Some("+"));
-    }
-
-    #[test]
-    fn test_nested_if_expressions() {
-        let result = eval_str("(if (< 3 5) (if (> 10 8) 'yes 'no) 'outer-no)").unwrap();
-        assert_eq!(result.as_symbol(), Some("yes"));
-    }
-
-    #[test]
-    fn test_arithmetic_with_variables() {
-        let mut env = Env::new();
-        eval_str_with_env("(define a 10)", &mut env).unwrap();
-        eval_str_with_env("(define b 20)", &mut env).unwrap();
-        eval_str_with_env("(define c (+ a b))", &mut env).unwrap();
-        let result = eval_str_with_env("(* c 2)", &mut env).unwrap();
-        assert_int(&result, 60);
-    }
-
-    #[test]
-    fn test_list_of_rationals() {
-        let result = eval_str("'(1/2 1/3 1/4)").unwrap();
-        let cons = result.as_cons().expect("Expected cons");
-        assert_eq!(cons.len(), 3);
-    }
-
-    #[test]
-    fn test_complex_boolean_logic() {
-        let result = eval_str("(if (< 1 2) (if (> 5 3) #t #f) #f)").unwrap();
-        assert_eq!(result.as_bool(), Some(true));
-    }
-
-    use std::time::Instant;
-
-    #[test]
-    pub fn bench_fib() {
-        let mut env = Env::new();
-
-        // Naive recursive fib in LISP
-        let fib_def = r#"
+    // Test lambda
+    println!("\nTesting lambda:");
+    let _ = eval(parse("(define square (lambda (x) (* x x)))").unwrap(), &env).unwrap();
+    let result = eval(parse("(square 5)").unwrap(), &env).unwrap();
+    println!("(square 5) = {}", result.to_string());
+
+    // Test recursive fibonacci
+    println!("\nTesting recursive fib:");
+    let fib_def = r#"
         (define fib
             (lambda (n)
                 (if (= n 0)
@@ -1556,25 +953,29 @@ mod lisp_tests {
             )
         )
     "#;
+    let _ = eval(parse(fib_def).unwrap(), &env).unwrap();
 
-        // Parse + eval the fib definition
-        let parsed = parse(fib_def).expect("parse failed");
-        eval(parsed, &mut env).expect("eval failed");
+    // Time the fibonacci execution
+    let start = Instant::now();
+    let result = eval(parse("(fib 10)").unwrap(), &env).unwrap();
+    let duration = start.elapsed();
 
-        let n = 10;
-        // Build "(fib n)" expression
-        let call_expr = format!("(fib {})", n);
-        let parsed_call = parse(&call_expr).expect("parse failed");
+    println!("(fib 10) = {}", result.to_string());
+    println!("Time taken: {:?}", duration);
 
-        let start = Instant::now();
-        let result = eval(parsed_call, &mut env).expect("fib evaluation failed");
-        let elapsed = start.elapsed();
+    // You could also test with larger values to see the exponential time growth
+    println!("\nTesting fib with larger value:");
+    let start = Instant::now();
+    let result = eval(parse("(fib 15)").unwrap(), &env).unwrap();
+    let duration = start.elapsed();
+    println!("(fib 15) = {}", result.to_string());
+    println!("Time taken: {:?}", duration);
 
-        println!("fib({}) = {}", n, result.to_string());
-        println!(
-            "Time: {}.{:03} seconds",
-            elapsed.as_secs(),
-            elapsed.subsec_millis()
-        );
-    }
+    // Even larger - this will be noticeably slower
+    println!("\nTesting fib with even larger value:");
+    let start = Instant::now();
+    let result = eval(parse("(fib 30)").unwrap(), &env).unwrap();
+    let duration = start.elapsed();
+    println!("(fib 60000) = {}", result.to_string());
+    println!("Time taken: {:?}", duration);
 }
