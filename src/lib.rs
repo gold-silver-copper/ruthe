@@ -8,11 +8,6 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::cmp::Ordering;
-use core::hash::BuildHasherDefault;
-use hashbrown::HashMap;
-use rustc_hash::FxHasher;
-
-type FxHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 // ============================================================================
 // Optimized Value Type - Lambda is now a Rust closure
@@ -50,7 +45,6 @@ impl core::fmt::Debug for Value {
 pub type ValRef = Rc<Value>;
 
 impl Value {
-    #[inline(always)]
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Number(_) => "number",
@@ -63,7 +57,6 @@ impl Value {
         }
     }
 
-    #[inline(always)]
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(b) => Some(*b),
@@ -71,7 +64,6 @@ impl Value {
         }
     }
 
-    #[inline(always)]
     pub fn as_number(&self) -> Option<f64> {
         match self {
             Value::Number(n) => Some(n.to_f64()),
@@ -79,7 +71,6 @@ impl Value {
         }
     }
 
-    #[inline(always)]
     pub fn as_number_exact(&self) -> Option<&Number> {
         match self {
             Value::Number(n) => Some(n),
@@ -87,7 +78,6 @@ impl Value {
         }
     }
 
-    #[inline(always)]
     pub fn as_symbol(&self) -> Option<&str> {
         match self {
             Value::Symbol(s) => Some(s),
@@ -95,7 +85,6 @@ impl Value {
         }
     }
 
-    #[inline(always)]
     pub fn as_cons(&self) -> Option<(&ValRef, &ValRef)> {
         match self {
             Value::Cons(car, cdr) => Some((car, cdr)),
@@ -103,7 +92,6 @@ impl Value {
         }
     }
 
-    #[inline(always)]
     pub fn as_builtin(&self) -> Option<BuiltinFn> {
         match self {
             Value::Builtin(f) => Some(*f),
@@ -111,7 +99,6 @@ impl Value {
         }
     }
 
-    #[inline(always)]
     pub fn as_closure(&self) -> Option<&ClosureFn> {
         match self {
             Value::Closure(f) => Some(f),
@@ -119,17 +106,14 @@ impl Value {
         }
     }
 
-    #[inline(always)]
     pub fn is_callable(&self) -> bool {
         matches!(self, Value::Builtin(_) | Value::Closure(_))
     }
 
-    #[inline(always)]
     pub fn is_nil(&self) -> bool {
         matches!(self, Value::Nil)
     }
 
-    #[inline(always)]
     pub fn to_string(&self) -> String {
         match self {
             Value::Number(n) => n.to_string(),
@@ -145,7 +129,6 @@ impl Value {
 
 // Helper function to convert a cons list to string
 
-#[inline(always)]
 fn list_to_string(val: &Value) -> String {
     let mut items = Vec::new();
     let mut current = val;
@@ -178,7 +161,7 @@ fn list_to_string(val: &Value) -> String {
 }
 
 // Helper function to get length of a list
-#[inline(always)]
+
 fn list_len(val: &Value) -> usize {
     let mut count = 0;
     let mut current = val;
@@ -198,7 +181,7 @@ fn list_len(val: &Value) -> usize {
 }
 
 // Helper function to convert list to vector
-#[inline(always)]
+
 fn list_to_vec(val: &Value) -> Vec<ValRef> {
     let mut items = Vec::new();
     let mut current = val;
@@ -228,12 +211,10 @@ pub enum Number {
 }
 
 impl Number {
-    #[inline(always)]
     pub fn integer(n: i64) -> Self {
         Number::Integer(n)
     }
 
-    #[inline(always)]
     pub fn rational(num: i64, den: i64) -> Self {
         if den == 0 {
             panic!("Division by zero in rational");
@@ -255,7 +236,6 @@ impl Number {
         }
     }
 
-    #[inline(always)]
     pub fn gcd(mut a: i64, mut b: i64) -> i64 {
         while b != 0 {
             let t = b;
@@ -265,7 +245,6 @@ impl Number {
         a
     }
 
-    #[inline(always)]
     pub fn to_f64(&self) -> f64 {
         match self {
             Number::Integer(n) => *n as f64,
@@ -273,7 +252,6 @@ impl Number {
         }
     }
 
-    #[inline(always)]
     pub fn add(&self, other: &Number) -> Number {
         match (self, other) {
             (Number::Integer(a), Number::Integer(b)) => Number::Integer(a + b),
@@ -287,7 +265,6 @@ impl Number {
         }
     }
 
-    #[inline(always)]
     pub fn sub(&self, other: &Number) -> Number {
         match (self, other) {
             (Number::Integer(a), Number::Integer(b)) => Number::Integer(a - b),
@@ -303,7 +280,6 @@ impl Number {
         }
     }
 
-    #[inline(always)]
     pub fn mul(&self, other: &Number) -> Number {
         match (self, other) {
             (Number::Integer(a), Number::Integer(b)) => Number::Integer(a * b),
@@ -315,7 +291,6 @@ impl Number {
         }
     }
 
-    #[inline(always)]
     pub fn div(&self, other: &Number) -> Result<Number, String> {
         match (self, other) {
             (_, Number::Integer(0)) => Err("Division by zero".to_string()),
@@ -334,7 +309,6 @@ impl Number {
         }
     }
 
-    #[inline(always)]
     pub fn neg(&self) -> Number {
         match self {
             Number::Integer(n) => Number::Integer(-n),
@@ -342,7 +316,6 @@ impl Number {
         }
     }
 
-    #[inline(always)]
     pub fn cmp(&self, other: &Number) -> Ordering {
         match (self, other) {
             (Number::Integer(a), Number::Integer(b)) => a.cmp(b),
@@ -352,7 +325,6 @@ impl Number {
         }
     }
 
-    #[inline(always)]
     pub fn to_string(&self) -> String {
         match self {
             Number::Integer(n) => format!("{}", n),
@@ -365,37 +337,30 @@ impl Number {
 // Constructors
 // ============================================================================
 
-#[inline(always)]
 pub fn val_number(n: i64) -> ValRef {
     Rc::new(Value::Number(Number::integer(n)))
 }
 
-#[inline(always)]
 pub fn val_rational(num: i64, den: i64) -> ValRef {
     Rc::new(Value::Number(Number::rational(num, den)))
 }
 
-#[inline(always)]
 pub fn val_number_from_num(n: Number) -> ValRef {
     Rc::new(Value::Number(n))
 }
 
-#[inline(always)]
 pub fn val_symbol(s: &str) -> ValRef {
     Rc::new(Value::Symbol(s.to_string()))
 }
 
-#[inline(always)]
 pub fn val_bool(b: bool) -> ValRef {
     Rc::new(Value::Bool(b))
 }
 
-#[inline(always)]
 pub fn val_cons(car: ValRef, cdr: ValRef) -> ValRef {
     Rc::new(Value::Cons(car, cdr))
 }
 
-#[inline(always)]
 pub fn val_list(items: Vec<ValRef>) -> ValRef {
     items
         .into_iter()
@@ -403,17 +368,14 @@ pub fn val_list(items: Vec<ValRef>) -> ValRef {
         .fold(val_nil(), |acc, item| val_cons(item, acc))
 }
 
-#[inline(always)]
 pub fn val_builtin(f: BuiltinFn) -> ValRef {
     Rc::new(Value::Builtin(f))
 }
 
-#[inline(always)]
 pub fn val_closure(f: ClosureFn) -> ValRef {
     Rc::new(Value::Closure(f))
 }
 
-#[inline(always)]
 pub fn val_nil() -> ValRef {
     Rc::new(Value::Nil)
 }
@@ -431,7 +393,6 @@ pub struct Env {
 }
 
 impl Env {
-    #[inline(always)]
     pub fn new() -> EnvRef {
         let mut env = Self {
             bindings: val_nil(),
@@ -441,7 +402,6 @@ impl Env {
         Rc::new(RefCell::new(env))
     }
 
-    #[inline(always)]
     pub fn with_parent(parent: EnvRef) -> EnvRef {
         let env = Self {
             bindings: val_nil(),
@@ -450,7 +410,6 @@ impl Env {
         Rc::new(RefCell::new(env))
     }
 
-    #[inline(always)]
     pub fn set(&mut self, name: String, v: ValRef) {
         // Create a new binding pair: (symbol . value)
         let binding = val_cons(val_symbol(&name), v);
@@ -458,7 +417,6 @@ impl Env {
         self.bindings = val_cons(binding, Rc::clone(&self.bindings));
     }
 
-    #[inline(always)]
     pub fn get(&self, name: &str) -> Option<ValRef> {
         // Search through association list
         let mut current = self.bindings.as_ref();
@@ -524,7 +482,6 @@ enum Token {
     Quote,
 }
 
-#[inline(always)]
 fn parse_i64(s: &str) -> Result<i64, ()> {
     let bytes = s.as_bytes();
     if bytes.is_empty() {
@@ -656,7 +613,6 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
 // Parser
 // ============================================================================
 
-#[inline(always)]
 fn parse_tokens(tokens: &[Token]) -> Result<(ValRef, usize), String> {
     if tokens.is_empty() {
         return Err("Unexpected end of input".to_string());
@@ -694,7 +650,6 @@ fn parse_tokens(tokens: &[Token]) -> Result<(ValRef, usize), String> {
     }
 }
 
-#[inline(always)]
 pub fn parse(input: &str) -> Result<ValRef, String> {
     let tokens = tokenize(input)?;
     if tokens.is_empty() {
@@ -843,7 +798,6 @@ pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
 // Built-in Functions
 // ============================================================================
 
-#[inline(always)]
 fn builtin_add(args: &[ValRef]) -> Result<ValRef, String> {
     let mut result = Number::integer(0);
     for arg in args {
@@ -853,7 +807,6 @@ fn builtin_add(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_number_from_num(result))
 }
 
-#[inline(always)]
 fn builtin_sub(args: &[ValRef]) -> Result<ValRef, String> {
     if args.is_empty() {
         return Err("- requires at least 1 argument".to_string());
@@ -870,7 +823,6 @@ fn builtin_sub(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_number_from_num(result))
 }
 
-#[inline(always)]
 fn builtin_mul(args: &[ValRef]) -> Result<ValRef, String> {
     let mut result = Number::integer(1);
     for arg in args {
@@ -880,7 +832,6 @@ fn builtin_mul(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_number_from_num(result))
 }
 
-#[inline(always)]
 fn builtin_div(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() < 2 {
         return Err("/ requires at least 2 arguments".to_string());
@@ -894,7 +845,6 @@ fn builtin_div(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_number_from_num(result))
 }
 
-#[inline(always)]
 fn builtin_eq(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 2 {
         return Err("= requires 2 arguments".to_string());
@@ -904,7 +854,6 @@ fn builtin_eq(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_bool(a.cmp(b) == Ordering::Equal))
 }
 
-#[inline(always)]
 fn builtin_lt(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 2 {
         return Err("< requires 2 arguments".to_string());
@@ -914,7 +863,6 @@ fn builtin_lt(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_bool(a.cmp(b) == Ordering::Less))
 }
 
-#[inline(always)]
 fn builtin_gt(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 2 {
         return Err("> requires 2 arguments".to_string());
@@ -924,12 +872,10 @@ fn builtin_gt(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_bool(a.cmp(b) == Ordering::Greater))
 }
 
-#[inline(always)]
 fn builtin_list(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_list(args.to_vec()))
 }
 
-#[inline(always)]
 fn builtin_car(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 1 {
         return Err("car requires 1 argument".to_string());
@@ -938,7 +884,6 @@ fn builtin_car(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(Rc::clone(car))
 }
 
-#[inline(always)]
 fn builtin_cdr(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 1 {
         return Err("cdr requires 1 argument".to_string());
@@ -947,7 +892,6 @@ fn builtin_cdr(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(Rc::clone(cdr))
 }
 
-#[inline(always)]
 fn builtin_cons_fn(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 2 {
         return Err("cons requires 2 arguments".to_string());
@@ -955,7 +899,6 @@ fn builtin_cons_fn(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_cons(Rc::clone(&args[0]), Rc::clone(&args[1])))
 }
 
-#[inline(always)]
 fn builtin_null(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 1 {
         return Err("null? requires 1 argument".to_string());
@@ -963,7 +906,6 @@ fn builtin_null(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_bool(args[0].is_nil()))
 }
 
-#[inline(always)]
 fn builtin_cons_p(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 1 {
         return Err("cons? requires 1 argument".to_string());
@@ -971,7 +913,6 @@ fn builtin_cons_p(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_bool(args[0].as_cons().is_some()))
 }
 
-#[inline(always)]
 fn builtin_length(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 1 {
         return Err("length requires 1 argument".to_string());
@@ -980,7 +921,6 @@ fn builtin_length(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_number(len as i64))
 }
 
-#[inline(always)]
 fn builtin_append(args: &[ValRef]) -> Result<ValRef, String> {
     let mut result = Vec::new();
     for arg in args {
@@ -990,7 +930,6 @@ fn builtin_append(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_list(result))
 }
 
-#[inline(always)]
 fn builtin_reverse(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 1 {
         return Err("reverse requires 1 argument".to_string());
@@ -1004,13 +943,11 @@ fn builtin_reverse(args: &[ValRef]) -> Result<ValRef, String> {
 // Public API for no_std environments
 // ============================================================================
 
-#[inline(always)]
 /// Create a new environment with all built-in functions registered
 pub fn create_env() -> EnvRef {
     Env::new()
 }
 
-#[inline(always)]
 /// Parse and evaluate a Lisp expression string
 pub fn eval_str(input: &str, env: &EnvRef) -> Result<String, String> {
     let expr = parse(input)?;
