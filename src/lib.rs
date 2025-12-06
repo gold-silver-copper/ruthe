@@ -426,7 +426,7 @@ pub type EnvRef = Rc<RefCell<Env>>;
 
 #[derive(Debug, Clone)]
 pub struct Env {
-    vars: FxHashMap<String, ValRef>,
+    bindings: ValRef, // Association list: ((sym . val) (sym . val) ...)
     parent: Option<EnvRef>,
 }
 
@@ -434,7 +434,7 @@ impl Env {
     #[inline(always)]
     pub fn new() -> EnvRef {
         let mut env = Self {
-            vars: FxHashMap::default(),
+            bindings: val_nil(),
             parent: None,
         };
         env.register_builtins();
@@ -444,7 +444,7 @@ impl Env {
     #[inline(always)]
     pub fn with_parent(parent: EnvRef) -> EnvRef {
         let env = Self {
-            vars: FxHashMap::default(),
+            bindings: val_nil(),
             parent: Some(parent),
         };
         Rc::new(RefCell::new(env))
@@ -452,14 +452,37 @@ impl Env {
 
     #[inline(always)]
     pub fn set(&mut self, name: String, v: ValRef) {
-        self.vars.insert(name, v);
+        // Create a new binding pair: (symbol . value)
+        let binding = val_cons(val_symbol(&name), v);
+        // Prepend to bindings list
+        self.bindings = val_cons(binding, Rc::clone(&self.bindings));
     }
 
     #[inline(always)]
     pub fn get(&self, name: &str) -> Option<ValRef> {
-        if let Some(val) = self.vars.get(name) {
-            Some(Rc::clone(val))
-        } else if let Some(parent) = &self.parent {
+        // Search through association list
+        let mut current = self.bindings.as_ref();
+
+        loop {
+            match current {
+                Value::Cons(car, cdr) => {
+                    // Each binding is (symbol . value)
+                    if let Some((sym, val)) = car.as_cons() {
+                        if let Some(s) = sym.as_symbol() {
+                            if s == name {
+                                return Some(Rc::clone(val));
+                            }
+                        }
+                    }
+                    current = cdr.as_ref();
+                }
+                Value::Nil => break,
+                _ => break,
+            }
+        }
+
+        // Not found in current env, try parent
+        if let Some(parent) = &self.parent {
             parent.borrow().get(name)
         } else {
             None
@@ -486,7 +509,6 @@ impl Env {
         self.set("reverse".to_string(), val_builtin(builtin_reverse));
     }
 }
-
 // ============================================================================
 // Tokenizer
 // ============================================================================
