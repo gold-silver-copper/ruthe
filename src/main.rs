@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, LinkedList};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 // ============================================================================
@@ -64,7 +64,7 @@ pub enum Value {
     Number(Number),
     Symbol(String),
     Bool(bool),
-    Cons(Rc<Cons>),
+    Cons(ValRef, ValRef), // Traditional cons: (car . cdr)
     Builtin(BuiltinFn),
     Closure(ClosureFn),
     Nil,
@@ -77,7 +77,7 @@ impl std::fmt::Debug for Value {
             Value::Number(n) => write!(f, "Number({:?})", n),
             Value::Symbol(s) => write!(f, "Symbol({:?})", s),
             Value::Bool(b) => write!(f, "Bool({:?})", b),
-            Value::Cons(c) => write!(f, "Cons({:?})", c),
+            Value::Cons(car, cdr) => write!(f, "Cons({:?}, {:?})", car, cdr),
             Value::Builtin(_) => write!(f, "Builtin(<fn>)"),
             Value::Closure(_) => write!(f, "Closure(<fn>)"),
             Value::Nil => write!(f, "Nil"),
@@ -93,7 +93,7 @@ impl Value {
             Value::Number(_) => "number",
             Value::Symbol(_) => "symbol",
             Value::Bool(_) => "bool",
-            Value::Cons(_) => "cons",
+            Value::Cons(_, _) => "cons",
             Value::Builtin(_) => "builtin",
             Value::Closure(_) => "closure",
             Value::Nil => "nil",
@@ -128,9 +128,9 @@ impl Value {
         }
     }
 
-    pub fn as_cons(&self) -> Option<&Cons> {
+    pub fn as_cons(&self) -> Option<(&ValRef, &ValRef)> {
         match self {
-            Value::Cons(c) => Some(c),
+            Value::Cons(car, cdr) => Some((car, cdr)),
             _ => None,
         }
     }
@@ -162,12 +162,74 @@ impl Value {
             Value::Number(n) => n.to_string(),
             Value::Symbol(s) => s.clone(),
             Value::Bool(b) => if *b { "#t" } else { "#f" }.to_string(),
-            Value::Cons(c) => c.to_string(),
+            Value::Cons(_, _) => list_to_string(self),
             Value::Builtin(_) => "<builtin>".to_string(),
             Value::Closure(_) => "<closure>".to_string(),
             Value::Nil => "nil".to_string(),
         }
     }
+}
+
+// Helper function to convert a cons list to string
+fn list_to_string(val: &Value) -> String {
+    let mut items = Vec::new();
+    let mut current = val;
+
+    loop {
+        match current {
+            Value::Cons(car, cdr) => {
+                items.push(car.to_string());
+                current = cdr.as_ref();
+            }
+            Value::Nil => break,
+            _ => {
+                // Improper list (dotted pair)
+                items.push(".".to_string());
+                items.push(current.to_string());
+                break;
+            }
+        }
+    }
+
+    format!("({})", items.join(" "))
+}
+
+// Helper function to get length of a list
+fn list_len(val: &Value) -> usize {
+    let mut count = 0;
+    let mut current = val;
+
+    loop {
+        match current {
+            Value::Cons(_, cdr) => {
+                count += 1;
+                current = cdr.as_ref();
+            }
+            Value::Nil => break,
+            _ => break, // Improper list
+        }
+    }
+
+    count
+}
+
+// Helper function to convert list to vector
+fn list_to_vec(val: &Value) -> Vec<ValRef> {
+    let mut items = Vec::new();
+    let mut current = val;
+
+    loop {
+        match current {
+            Value::Cons(car, cdr) => {
+                items.push(Rc::clone(car));
+                current = cdr.as_ref();
+            }
+            Value::Nil => break,
+            _ => break,
+        }
+    }
+
+    items
 }
 
 // ============================================================================
@@ -304,76 +366,6 @@ impl Number {
 }
 
 // ============================================================================
-// Cons Cell
-// ============================================================================
-
-#[derive(Debug, Clone)]
-pub struct Cons {
-    list: LinkedList<ValRef>,
-}
-
-impl Cons {
-    pub fn new() -> Self {
-        Self {
-            list: LinkedList::new(),
-        }
-    }
-
-    pub fn from_vec(items: Vec<ValRef>) -> Self {
-        let mut list = LinkedList::new();
-        for item in items {
-            list.push_back(item);
-        }
-        Self { list }
-    }
-
-    pub fn from_list(list: LinkedList<ValRef>) -> Self {
-        Self { list }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.list.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.list.len()
-    }
-
-    pub fn car(&self) -> Option<ValRef> {
-        self.list.front().map(|v| Rc::clone(v))
-    }
-
-    pub fn cdr(&self) -> Rc<Cons> {
-        let mut new_list = self.list.clone();
-        new_list.pop_front();
-        Rc::new(Cons::from_list(new_list))
-    }
-
-    pub fn cons(val: ValRef, rest: &Cons) -> Rc<Cons> {
-        let mut new_list = LinkedList::new();
-        new_list.push_back(val);
-        new_list.append(&mut rest.list.clone());
-        Rc::new(Cons::from_list(new_list))
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &ValRef> {
-        self.list.iter()
-    }
-
-    pub fn to_vec(&self) -> Vec<ValRef> {
-        self.list.iter().map(|v| Rc::clone(v)).collect()
-    }
-
-    pub fn to_string(&self) -> String {
-        if self.is_empty() {
-            return "()".to_string();
-        }
-        let items: Vec<String> = self.iter().map(|v| v.to_string()).collect();
-        format!("({})", items.join(" "))
-    }
-}
-
-// ============================================================================
 // Constructors
 // ============================================================================
 
@@ -397,12 +389,15 @@ pub fn val_bool(b: bool) -> ValRef {
     Rc::new(Value::Bool(b))
 }
 
-pub fn val_cons(items: Vec<ValRef>) -> ValRef {
-    Rc::new(Value::Cons(Rc::new(Cons::from_vec(items))))
+pub fn val_cons(car: ValRef, cdr: ValRef) -> ValRef {
+    Rc::new(Value::Cons(car, cdr))
 }
 
-pub fn val_cons_from_list(list: LinkedList<ValRef>) -> ValRef {
-    Rc::new(Value::Cons(Rc::new(Cons::from_list(list))))
+pub fn val_list(items: Vec<ValRef>) -> ValRef {
+    items
+        .into_iter()
+        .rev()
+        .fold(val_nil(), |acc, item| val_cons(item, acc))
 }
 
 pub fn val_builtin(f: BuiltinFn) -> ValRef {
@@ -473,7 +468,7 @@ impl Env {
         self.set("list".to_string(), val_builtin(builtin_list));
         self.set("car".to_string(), val_builtin(builtin_car));
         self.set("cdr".to_string(), val_builtin(builtin_cdr));
-        self.set("cons".to_string(), val_builtin(builtin_cons));
+        self.set("cons".to_string(), val_builtin(builtin_cons_fn));
         self.set("null?".to_string(), val_builtin(builtin_null));
         self.set("cons?".to_string(), val_builtin(builtin_cons_p));
         self.set("length".to_string(), val_builtin(builtin_length));
@@ -593,7 +588,7 @@ fn parse_tokens(tokens: &[Token]) -> Result<(ValRef, usize), String> {
                 return Err("Quote requires an expression".to_string());
             }
             let (val, consumed) = parse_tokens(&tokens[1..])?;
-            let quoted = val_cons(vec![val_symbol("quote"), val]);
+            let quoted = val_list(vec![val_symbol("quote"), val]);
             Ok((quoted, consumed + 1))
         }
         Token::LParen => {
@@ -602,7 +597,7 @@ fn parse_tokens(tokens: &[Token]) -> Result<(ValRef, usize), String> {
 
             while pos < tokens.len() {
                 if tokens[pos] == Token::RParen {
-                    return Ok((val_cons(items), pos + 1));
+                    return Ok((val_list(items), pos + 1));
                 }
                 let (val, consumed) = parse_tokens(&tokens[pos..])?;
                 items.push(val);
@@ -644,21 +639,15 @@ pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
                 .get(s)
                 .ok_or_else(|| format!("Unbound symbol: {}", s))
         }
-        Value::Cons(cons) => {
-            if cons.is_empty() {
-                return Ok(val_nil());
-            }
-
-            let first = cons.car().ok_or("Empty cons in eval")?;
-
+        Value::Cons(car, cdr) => {
             // Special forms
-            if let Value::Symbol(sym) = first.as_ref() {
+            if let Value::Symbol(sym) = car.as_ref() {
                 match sym.as_str() {
                     "define" => {
-                        if cons.len() != 3 {
+                        let items = list_to_vec(expr.as_ref());
+                        if items.len() != 3 {
                             return Err("define requires 2 arguments".to_string());
                         }
-                        let items = cons.to_vec();
                         let name = items[1]
                             .as_symbol()
                             .ok_or("define requires symbol as first arg")?;
@@ -667,15 +656,14 @@ pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
                         return Ok(val);
                     }
                     "lambda" => {
-                        if cons.len() != 3 {
+                        let items = list_to_vec(expr.as_ref());
+                        if items.len() != 3 {
                             return Err("lambda requires 2 arguments (params body)".to_string());
                         }
-                        let items = cons.to_vec();
 
                         // Extract parameter names
-                        let params_cons =
-                            items[1].as_cons().ok_or("lambda params must be a list")?;
-                        let params: Result<Vec<String>, String> = params_cons
+                        let params_list = list_to_vec(items[1].as_ref());
+                        let params: Result<Vec<String>, String> = params_list
                             .iter()
                             .map(|p| {
                                 p.as_symbol()
@@ -688,7 +676,6 @@ pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
                         let body = Rc::clone(&items[2]);
 
                         // Capture the environment by reference (Rc)
-                        // This allows recursive functions to work!
                         let captured_env = Rc::clone(env);
 
                         // Create a Rust closure that captures the environment and body
@@ -716,10 +703,10 @@ pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
                         return Ok(val_closure(Rc::new(closure)));
                     }
                     "if" => {
-                        if cons.len() != 4 {
+                        let items = list_to_vec(expr.as_ref());
+                        if items.len() != 4 {
                             return Err("if requires 3 arguments".to_string());
                         }
-                        let items = cons.to_vec();
                         let cond = eval(Rc::clone(&items[1]), env)?;
                         let is_true = match cond.as_ref() {
                             Value::Bool(b) => *b,
@@ -729,10 +716,10 @@ pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
                         return eval(Rc::clone(&items[if is_true { 2 } else { 3 }]), env);
                     }
                     "quote" => {
-                        if cons.len() != 2 {
+                        let items = list_to_vec(expr.as_ref());
+                        if items.len() != 2 {
                             return Err("quote requires 1 argument".to_string());
                         }
-                        let items = cons.to_vec();
                         return Ok(Rc::clone(&items[1]));
                     }
                     _ => {}
@@ -740,12 +727,21 @@ pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
             }
 
             // Function application
-            let func = eval(Rc::clone(&first), env)?;
+            let func = eval(Rc::clone(car), env)?;
 
-            let rest = cons.cdr();
-            let args: Result<Vec<ValRef>, String> =
-                rest.iter().map(|arg| eval(Rc::clone(arg), env)).collect();
-            let args = args?;
+            // Evaluate arguments
+            let mut args = Vec::new();
+            let mut current = cdr.as_ref();
+            loop {
+                match current {
+                    Value::Cons(arg_car, arg_cdr) => {
+                        args.push(eval(Rc::clone(arg_car), env)?);
+                        current = arg_cdr.as_ref();
+                    }
+                    Value::Nil => break,
+                    _ => return Err("Malformed argument list".to_string()),
+                }
+            }
 
             // Call builtin or closure
             match func.as_ref() {
@@ -754,11 +750,12 @@ pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
                 _ => Err(format!("Cannot call non-function: {}", func.to_string())),
             }
         }
+        Value::Nil => Ok(val_nil()),
     }
 }
 
 // ============================================================================
-// Built-in Functions - Now regular Rust functions!
+// Built-in Functions
 // ============================================================================
 
 fn builtin_add(args: &[ValRef]) -> Result<ValRef, String> {
@@ -836,51 +833,37 @@ fn builtin_gt(args: &[ValRef]) -> Result<ValRef, String> {
 }
 
 fn builtin_list(args: &[ValRef]) -> Result<ValRef, String> {
-    Ok(val_cons(args.to_vec()))
+    Ok(val_list(args.to_vec()))
 }
 
 fn builtin_car(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 1 {
         return Err("car requires 1 argument".to_string());
     }
-    let cons = args[0].as_cons().ok_or("car requires a cons/list")?;
-    cons.car().ok_or("car of empty list".to_string())
+    let (car, _) = args[0].as_cons().ok_or("car requires a cons/list")?;
+    Ok(Rc::clone(car))
 }
 
 fn builtin_cdr(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 1 {
         return Err("cdr requires 1 argument".to_string());
     }
-    let cons = args[0].as_cons().ok_or("cdr requires a cons/list")?;
-    Ok(Rc::new(Value::Cons(cons.cdr())))
+    let (_, cdr) = args[0].as_cons().ok_or("cdr requires a cons/list")?;
+    Ok(Rc::clone(cdr))
 }
 
-fn builtin_cons(args: &[ValRef]) -> Result<ValRef, String> {
+fn builtin_cons_fn(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 2 {
         return Err("cons requires 2 arguments".to_string());
     }
-    if let Some(rest_cons) = args[1].as_cons() {
-        Ok(Rc::new(Value::Cons(Cons::cons(
-            Rc::clone(&args[0]),
-            rest_cons,
-        ))))
-    } else if args[1].is_nil() {
-        Ok(val_cons(vec![Rc::clone(&args[0])]))
-    } else {
-        Ok(val_cons(vec![Rc::clone(&args[0]), Rc::clone(&args[1])]))
-    }
+    Ok(val_cons(Rc::clone(&args[0]), Rc::clone(&args[1])))
 }
 
 fn builtin_null(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 1 {
         return Err("null? requires 1 argument".to_string());
     }
-    let is_nil = if let Some(cons) = args[0].as_cons() {
-        cons.is_empty()
-    } else {
-        args[0].is_nil()
-    };
-    Ok(val_bool(is_nil))
+    Ok(val_bool(args[0].is_nil()))
 }
 
 fn builtin_cons_p(args: &[ValRef]) -> Result<ValRef, String> {
@@ -894,32 +877,26 @@ fn builtin_length(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 1 {
         return Err("length requires 1 argument".to_string());
     }
-    let cons = args[0].as_cons().ok_or("length requires a list")?;
-    Ok(val_number(cons.len() as i64))
+    let len = list_len(args[0].as_ref());
+    Ok(val_number(len as i64))
 }
 
 fn builtin_append(args: &[ValRef]) -> Result<ValRef, String> {
-    let mut result = LinkedList::new();
+    let mut result = Vec::new();
     for arg in args {
-        if let Some(cons) = arg.as_cons() {
-            for item in cons.iter() {
-                result.push_back(Rc::clone(item));
-            }
-        } else {
-            return Err("append requires lists".to_string());
-        }
+        let items = list_to_vec(arg.as_ref());
+        result.extend(items);
     }
-    Ok(val_cons_from_list(result))
+    Ok(val_list(result))
 }
 
 fn builtin_reverse(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 1 {
         return Err("reverse requires 1 argument".to_string());
     }
-    let cons = args[0].as_cons().ok_or("reverse requires a list")?;
-    let mut vec: Vec<ValRef> = cons.to_vec();
+    let mut vec = list_to_vec(args[0].as_ref());
     vec.reverse();
-    Ok(val_cons(vec))
+    Ok(val_list(vec))
 }
 
 use std::time::Instant;
@@ -976,6 +953,6 @@ fn main() {
     let start = Instant::now();
     let result = eval(parse("(fib 30)").unwrap(), &env).unwrap();
     let duration = start.elapsed();
-    println!("(fib 60000) = {}", result.to_string());
+    println!("(fib 30) = {}", result.to_string());
     println!("Time taken: {:?}", duration);
 }
