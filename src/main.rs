@@ -1,143 +1,80 @@
 use std::collections::{HashMap, LinkedList};
 use std::fmt;
-use std::io::{self, Write};
 use std::rc::Rc;
 
 // ============================================================================
-// Value Trait - Core abstraction for all Lisp values
-// ============================================================================
-
-pub trait Value: fmt::Debug {
-    fn type_name(&self) -> &'static str;
-    fn as_bool(&self) -> Option<bool> {
-        None
-    }
-    fn as_number(&self) -> Option<f64> {
-        None
-    }
-    fn as_number_exact(&self) -> Option<&Number> {
-        None
-    }
-    fn as_symbol(&self) -> Option<&str> {
-        None
-    }
-    fn as_cons(&self) -> Option<ConsRef> {
-        None
-    }
-    fn is_nil(&self) -> bool {
-        false
-    }
-
-    // For display purposes
-    fn to_string(&self) -> String {
-        format!("{:?}", self)
-    }
-}
-
-pub type ValRef = Rc<dyn Value>;
-
-// ============================================================================
-// Cons Cell - Proper Lisp cons using LinkedList
+// Optimized Value Type - Single enum instead of trait objects
 // ============================================================================
 
 #[derive(Debug, Clone)]
-pub struct Cons {
-    // Using LinkedList internally for true linked structure
-    list: LinkedList<ValRef>,
+pub enum Value {
+    Number(Number),
+    Symbol(String),
+    Bool(bool),
+    Cons(ConsRef),
+    Nil,
 }
 
-pub type ConsRef = Rc<Cons>;
+pub type ValRef = Rc<Value>;
 
-impl Cons {
-    pub fn new() -> Self {
-        Self {
-            list: LinkedList::new(),
+impl Value {
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Value::Number(_) => "number",
+            Value::Symbol(_) => "symbol",
+            Value::Bool(_) => "bool",
+            Value::Cons(_) => "cons",
+            Value::Nil => "nil",
         }
     }
 
-    pub fn from_vec(items: Vec<ValRef>) -> Self {
-        let mut list = LinkedList::new();
-        for item in items {
-            list.push_back(item);
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(b) => Some(*b),
+            _ => None,
         }
-        Self { list }
     }
 
-    pub fn from_list(list: LinkedList<ValRef>) -> Self {
-        Self { list }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.list.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.list.len()
-    }
-
-    pub fn car(&self) -> Option<ValRef> {
-        self.list.front().map(|v| Rc::clone(v))
-    }
-
-    pub fn cdr(&self) -> ConsRef {
-        let mut new_list = self.list.clone();
-        new_list.pop_front();
-        Rc::new(Cons::from_list(new_list))
-    }
-
-    pub fn cons(val: ValRef, rest: ConsRef) -> ConsRef {
-        let mut new_list = LinkedList::new();
-        new_list.push_back(val);
-        new_list.append(&mut rest.list.clone());
-        Rc::new(Cons::from_list(new_list))
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &ValRef> {
-        self.list.iter()
-    }
-
-    pub fn to_vec(&self) -> Vec<ValRef> {
-        self.list.iter().map(|v| Rc::clone(v)).collect()
-    }
-
-    // Append a value to the end (useful for building lists)
-    pub fn append(&self, val: ValRef) -> ConsRef {
-        let mut new_list = self.list.clone();
-        new_list.push_back(val);
-        Rc::new(Cons::from_list(new_list))
-    }
-}
-
-impl Value for Cons {
-    fn type_name(&self) -> &'static str {
-        "cons"
-    }
-    fn as_cons(&self) -> Option<ConsRef> {
-        Some(Rc::new(self.clone()))
-    }
-    fn to_string(&self) -> String {
-        if self.is_empty() {
-            return "()".to_string();
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            Value::Number(n) => Some(n.to_f64()),
+            _ => None,
         }
-        let items: Vec<String> = self.iter().map(|v| v.to_string()).collect();
-        format!("({})", items.join(" "))
     }
-}
 
-// Implement Value for Rc<Cons> to enable direct usage as ValRef
-impl Value for Rc<Cons> {
-    fn type_name(&self) -> &'static str {
-        "cons"
-    }
-    fn as_cons(&self) -> Option<ConsRef> {
-        Some(Rc::clone(self))
-    }
-    fn to_string(&self) -> String {
-        if self.is_empty() {
-            return "()".to_string();
+    pub fn as_number_exact(&self) -> Option<&Number> {
+        match self {
+            Value::Number(n) => Some(n),
+            _ => None,
         }
-        let items: Vec<String> = self.iter().map(|v| v.to_string()).collect();
-        format!("({})", items.join(" "))
+    }
+
+    pub fn as_symbol(&self) -> Option<&str> {
+        match self {
+            Value::Symbol(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_cons(&self) -> Option<&ConsRef> {
+        match self {
+            Value::Cons(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    pub fn is_nil(&self) -> bool {
+        matches!(self, Value::Nil)
+    }
+
+    pub fn to_string(&self) -> String {
+        match self {
+            Value::Number(n) => n.to_string(),
+            Value::Symbol(s) => s.clone(),
+            Value::Bool(b) => if *b { "#t" } else { "#f" }.to_string(),
+            Value::Cons(c) => c.to_string(),
+            Value::Nil => "nil".to_string(),
+        }
     }
 }
 
@@ -178,7 +115,7 @@ impl Number {
         }
     }
 
-    fn gcd(mut a: i64, mut b: i64) -> i64 {
+    pub fn gcd(mut a: i64, mut b: i64) -> i64 {
         while b != 0 {
             let t = b;
             b = a % b;
@@ -266,19 +203,8 @@ impl Number {
             (Number::Rational(n1, d1), Number::Rational(n2, d2)) => (n1 * d2).cmp(&(n2 * d1)),
         }
     }
-}
 
-impl Value for Number {
-    fn type_name(&self) -> &'static str {
-        "number"
-    }
-    fn as_number(&self) -> Option<f64> {
-        Some(self.to_f64())
-    }
-    fn as_number_exact(&self) -> Option<&Number> {
-        Some(self)
-    }
-    fn to_string(&self) -> String {
+    pub fn to_string(&self) -> String {
         match self {
             Number::Integer(n) => format!("{}", n),
             Number::Rational(num, den) => format!("{}/{}", num, den),
@@ -286,52 +212,75 @@ impl Value for Number {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Symbol(pub String);
+// ============================================================================
+// Cons Cell - Using LinkedList internally
+// ============================================================================
 
-impl Value for Symbol {
-    fn type_name(&self) -> &'static str {
-        "symbol"
-    }
-    fn as_symbol(&self) -> Option<&str> {
-        Some(&self.0)
-    }
-    fn to_string(&self) -> String {
-        self.0.clone()
-    }
+#[derive(Debug, Clone)]
+pub struct Cons {
+    list: LinkedList<ValRef>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Bool(pub bool);
+pub type ConsRef = Rc<Cons>;
 
-impl Value for Bool {
-    fn type_name(&self) -> &'static str {
-        "bool"
-    }
-    fn as_bool(&self) -> Option<bool> {
-        Some(self.0)
-    }
-    fn to_string(&self) -> String {
-        if self.0 {
-            "#t".to_string()
-        } else {
-            "#f".to_string()
+impl Cons {
+    pub fn new() -> Self {
+        Self {
+            list: LinkedList::new(),
         }
     }
-}
 
-#[derive(Debug)]
-pub struct Nil;
+    pub fn from_vec(items: Vec<ValRef>) -> Self {
+        let mut list = LinkedList::new();
+        for item in items {
+            list.push_back(item);
+        }
+        Self { list }
+    }
 
-impl Value for Nil {
-    fn type_name(&self) -> &'static str {
-        "nil"
+    pub fn from_list(list: LinkedList<ValRef>) -> Self {
+        Self { list }
     }
-    fn is_nil(&self) -> bool {
-        true
+
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
     }
-    fn to_string(&self) -> String {
-        "nil".to_string()
+
+    pub fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    pub fn car(&self) -> Option<ValRef> {
+        self.list.front().map(|v| Rc::clone(v))
+    }
+
+    pub fn cdr(&self) -> ConsRef {
+        let mut new_list = self.list.clone();
+        new_list.pop_front();
+        Rc::new(Cons::from_list(new_list))
+    }
+
+    pub fn cons(val: ValRef, rest: ConsRef) -> ConsRef {
+        let mut new_list = LinkedList::new();
+        new_list.push_back(val);
+        new_list.append(&mut rest.list.clone());
+        Rc::new(Cons::from_list(new_list))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ValRef> {
+        self.list.iter()
+    }
+
+    pub fn to_vec(&self) -> Vec<ValRef> {
+        self.list.iter().map(|v| Rc::clone(v)).collect()
+    }
+
+    pub fn to_string(&self) -> String {
+        if self.is_empty() {
+            return "()".to_string();
+        }
+        let items: Vec<String> = self.iter().map(|v| v.to_string()).collect();
+        format!("({})", items.join(" "))
     }
 }
 
@@ -340,35 +289,39 @@ impl Value for Nil {
 // ============================================================================
 
 pub fn val_number(n: i64) -> ValRef {
-    Rc::new(Number::integer(n))
+    Rc::new(Value::Number(Number::integer(n)))
 }
+
 pub fn val_rational(num: i64, den: i64) -> ValRef {
-    Rc::new(Number::rational(num, den))
+    Rc::new(Value::Number(Number::rational(num, den)))
 }
+
 pub fn val_number_from_num(n: Number) -> ValRef {
-    Rc::new(n)
+    Rc::new(Value::Number(n))
 }
+
 pub fn val_symbol(s: &str) -> ValRef {
-    Rc::new(Symbol(s.to_string()))
+    Rc::new(Value::Symbol(s.to_string()))
 }
+
 pub fn val_bool(b: bool) -> ValRef {
-    Rc::new(Bool(b))
+    Rc::new(Value::Bool(b))
 }
+
 pub fn val_cons(items: Vec<ValRef>) -> ValRef {
-    Rc::new(Cons::from_vec(items))
+    Rc::new(Value::Cons(Rc::new(Cons::from_vec(items))))
 }
+
 pub fn val_cons_from_list(list: LinkedList<ValRef>) -> ValRef {
-    Rc::new(Cons::from_list(list))
+    Rc::new(Value::Cons(Rc::new(Cons::from_list(list))))
 }
+
 pub fn val_nil() -> ValRef {
-    Rc::new(Nil)
-}
-pub fn empty_cons() -> ConsRef {
-    Rc::new(Cons::new())
+    Rc::new(Value::Nil)
 }
 
 // ============================================================================
-// Environment - Variable bindings
+// Environment
 // ============================================================================
 
 pub struct Env {
@@ -393,7 +346,6 @@ impl Env {
     }
 
     fn register_builtins(&mut self) {
-        // Register nil as a global constant
         self.set("nil".to_string(), val_nil());
     }
 }
@@ -435,7 +387,6 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 chars.next();
             }
             ';' => {
-                // Comment - skip to end of line
                 while let Some(&c) = chars.peek() {
                     chars.next();
                     if c == '\n' {
@@ -467,7 +418,6 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     chars.next();
                 }
 
-                // Try to parse as rational (e.g., 3/4)
                 if atom.contains('/') {
                     let parts: Vec<&str> = atom.split('/').collect();
                     if parts.len() == 2 {
@@ -480,7 +430,6 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     }
                 }
 
-                // Try to parse as integer
                 if let Ok(num) = atom.parse::<i64>() {
                     tokens.push(Token::Number(num));
                 } else {
@@ -551,86 +500,73 @@ pub fn parse(input: &str) -> Result<ValRef, String> {
 // ============================================================================
 
 pub fn eval(expr: ValRef, env: &mut Env) -> Result<ValRef, String> {
-    // Self-evaluating values
-    if expr.as_number().is_some() || expr.as_bool().is_some() || expr.is_nil() {
-        return Ok(expr);
-    }
-
-    // Symbol lookup
-    if let Some(sym) = expr.as_symbol() {
-        // Special case for nil
-        if sym == "nil" {
-            return Ok(val_nil());
-        }
-        return env
-            .get(sym)
-            .map(|v| Rc::clone(v))
-            .ok_or_else(|| format!("Unbound symbol: {}", sym));
-    }
-
-    // Cons cell evaluation (function application)
-    if let Some(cons) = expr.as_cons() {
-        if cons.is_empty() {
-            return Ok(val_nil());
-        }
-
-        let first = cons.car().ok_or("Empty cons in eval")?;
-
-        // Special forms
-        if let Some(sym) = first.as_symbol() {
-            match sym {
-                "define" => {
-                    if cons.len() != 3 {
-                        return Err("define requires 2 arguments".to_string());
-                    }
-                    let items = cons.to_vec();
-                    let name = items[1]
-                        .as_symbol()
-                        .ok_or("define requires symbol as first arg")?;
-                    let val = eval(Rc::clone(&items[2]), env)?;
-                    env.set(name.to_string(), Rc::clone(&val));
-                    return Ok(val);
-                }
-                "if" => {
-                    if cons.len() != 4 {
-                        return Err("if requires 3 arguments".to_string());
-                    }
-                    let items = cons.to_vec();
-                    let cond = eval(Rc::clone(&items[1]), env)?;
-                    let is_true = match cond.as_bool() {
-                        Some(b) => b,
-                        None => !cond.is_nil(), // nil is false, everything else is true
-                    };
-                    return eval(Rc::clone(&items[if is_true { 2 } else { 3 }]), env);
-                }
-                "quote" => {
-                    if cons.len() != 2 {
-                        return Err("quote requires 1 argument".to_string());
-                    }
-                    let items = cons.to_vec();
-                    return Ok(Rc::clone(&items[1]));
-                }
-                "lambda" => {
-                    // For future implementation
-                    return Err("lambda not yet implemented".to_string());
-                }
-                _ => {}
+    match expr.as_ref() {
+        Value::Number(_) | Value::Bool(_) | Value::Nil => Ok(Rc::clone(&expr)),
+        Value::Symbol(s) => {
+            if s == "nil" {
+                return Ok(val_nil());
             }
+            env.get(s)
+                .map(|v| Rc::clone(v))
+                .ok_or_else(|| format!("Unbound symbol: {}", s))
         }
+        Value::Cons(cons) => {
+            if cons.is_empty() {
+                return Ok(val_nil());
+            }
 
-        // Function application
-        let func_name = first.as_symbol().ok_or("First element must be a symbol")?;
+            let first = cons.car().ok_or("Empty cons in eval")?;
 
-        // Evaluate all arguments
-        let rest = cons.cdr();
-        let args: Result<Vec<ValRef>, String> =
-            rest.iter().map(|arg| eval(Rc::clone(arg), env)).collect();
-        let args = args?;
+            // Special forms
+            if let Value::Symbol(sym) = first.as_ref() {
+                match sym.as_str() {
+                    "define" => {
+                        if cons.len() != 3 {
+                            return Err("define requires 2 arguments".to_string());
+                        }
+                        let items = cons.to_vec();
+                        let name = items[1]
+                            .as_symbol()
+                            .ok_or("define requires symbol as first arg")?;
+                        let val = eval(Rc::clone(&items[2]), env)?;
+                        env.set(name.to_string(), Rc::clone(&val));
+                        return Ok(val);
+                    }
+                    "if" => {
+                        if cons.len() != 4 {
+                            return Err("if requires 3 arguments".to_string());
+                        }
+                        let items = cons.to_vec();
+                        let cond = eval(Rc::clone(&items[1]), env)?;
+                        let is_true = match cond.as_ref() {
+                            Value::Bool(b) => *b,
+                            Value::Nil => false,
+                            _ => true,
+                        };
+                        return eval(Rc::clone(&items[if is_true { 2 } else { 3 }]), env);
+                    }
+                    "quote" => {
+                        if cons.len() != 2 {
+                            return Err("quote requires 1 argument".to_string());
+                        }
+                        let items = cons.to_vec();
+                        return Ok(Rc::clone(&items[1]));
+                    }
+                    _ => {}
+                }
+            }
 
-        return apply_builtin(func_name, &args);
+            // Function application
+            let func_name = first.as_symbol().ok_or("First element must be a symbol")?;
+
+            let rest = cons.cdr();
+            let args: Result<Vec<ValRef>, String> =
+                rest.iter().map(|arg| eval(Rc::clone(arg), env)).collect();
+            let args = args?;
+
+            apply_builtin(func_name, &args)
+        }
     }
-
-    Err(format!("Cannot evaluate: {:?}", expr))
 }
 
 // ============================================================================
@@ -719,21 +655,20 @@ fn apply_builtin(name: &str, args: &[ValRef]) -> Result<ValRef, String> {
                 return Err("cdr requires 1 argument".to_string());
             }
             let cons = args[0].as_cons().ok_or("cdr requires a cons/list")?;
-            let cdr_cons = cons.cdr();
-            Ok(cdr_cons as ValRef)
+            Ok(Rc::new(Value::Cons(cons.cdr())))
         }
         "cons" => {
             if args.len() != 2 {
                 return Err("cons requires 2 arguments".to_string());
             }
             if let Some(rest_cons) = args[1].as_cons() {
-                let new_cons = Cons::cons(Rc::clone(&args[0]), rest_cons);
-                Ok(new_cons as ValRef)
+                Ok(Rc::new(Value::Cons(Cons::cons(
+                    Rc::clone(&args[0]),
+                    Rc::clone(rest_cons),
+                ))))
             } else if args[1].is_nil() {
-                // cons with nil creates a single-element list
                 Ok(val_cons(vec![Rc::clone(&args[0])]))
             } else {
-                // Improper list (dotted pair) - for now just create a 2-element list
                 Ok(val_cons(vec![Rc::clone(&args[0]), Rc::clone(&args[1])]))
             }
         }
@@ -788,64 +723,18 @@ fn apply_builtin(name: &str, args: &[ValRef]) -> Result<ValRef, String> {
 }
 
 // ============================================================================
-// REPL
-// ============================================================================
-
-fn repl() {
-    let mut env = Env::new();
-    println!("Tiny Lisp REPL with LinkedList Cons Cells");
-    println!("Type expressions or 'exit' to quit");
-    println!();
-    println!("Examples:");
-    println!("  (+ 1 2 3)              => 6");
-    println!("  (/ 22 7)               => 22/7 (exact rational)");
-    println!("  (* 1/2 2/3)            => 1/3");
-    println!("  (cons 1 (cons 2 nil))  => (1 2)");
-    println!("  '(1 2 3)               => (1 2 3)");
-    println!("  (car '(a b c))         => a");
-    println!("  (cdr '(a b c))         => (b c)");
-    println!("  (define x 42)          => 42");
-    println!("  (length '(1 2 3 4))    => 4");
-    println!("  (append '(1 2) '(3 4)) => (1 2 3 4)");
-    println!();
-
-    loop {
-        print!("lisp> ");
-        io::stdout().flush().unwrap();
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        let input = input.trim();
-
-        if input.is_empty() {
-            continue;
-        }
-
-        if input == "exit" || input == "quit" {
-            println!("Goodbye!");
-            break;
-        }
-
-        match parse(input) {
-            Ok(expr) => match eval(expr, &mut env) {
-                Ok(result) => println!("{}", result.to_string()),
-                Err(e) => println!("Error: {}", e),
-            },
-            Err(e) => println!("Parse error: {}", e),
-        }
-    }
-}
-
-// ============================================================================
-// Main
+// Main (for demonstration - would use REPL from previous version)
 // ============================================================================
 
 fn main() {
-    repl();
-}
-// tests.rs - Comprehensive test suite for the Lisp interpreter
-// Place this in your src/ directory or tests/ directory
+    //repl();
+    let mut env = Env::new();
 
+    // Quick test
+    let result = parse("(+ 1 2 3)").unwrap();
+    let result = eval(result, &mut env).unwrap();
+    println!("Result: {}", result.to_string());
+}
 #[cfg(test)]
 mod lisp_tests {
 
@@ -1645,5 +1534,47 @@ mod lisp_tests {
     fn test_complex_boolean_logic() {
         let result = eval_str("(if (< 1 2) (if (> 5 3) #t #f) #f)").unwrap();
         assert_eq!(result.as_bool(), Some(true));
+    }
+
+    use std::time::Instant;
+
+    #[test]
+    pub fn bench_fib() {
+        let mut env = Env::new();
+
+        // Naive recursive fib in LISP
+        let fib_def = r#"
+        (define fib
+            (lambda (n)
+                (if (= n 0)
+                    0
+                    (if (= n 1)
+                        1
+                        (+ (fib (- n 1)) (fib (- n 2)))
+                    )
+                )
+            )
+        )
+    "#;
+
+        // Parse + eval the fib definition
+        let parsed = parse(fib_def).expect("parse failed");
+        eval(parsed, &mut env).expect("eval failed");
+
+        let n = 10;
+        // Build "(fib n)" expression
+        let call_expr = format!("(fib {})", n);
+        let parsed_call = parse(&call_expr).expect("parse failed");
+
+        let start = Instant::now();
+        let result = eval(parsed_call, &mut env).expect("fib evaluation failed");
+        let elapsed = start.elapsed();
+
+        println!("fib({}) = {}", n, result.to_string());
+        println!(
+            "Time: {}.{:03} seconds",
+            elapsed.as_secs(),
+            elapsed.subsec_millis()
+        );
     }
 }
