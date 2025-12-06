@@ -1,56 +1,18 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
+#![no_std]
 
-// ============================================================================
-// REPL
-// ============================================================================
+extern crate alloc;
 
-fn repl() {
-    use std::io::{self, Write};
-    let mut env = Env::new();
-    println!("Tiny Lisp REPL with Lambda Support");
-    println!("Type expressions or 'exit' to quit");
-    println!();
-    println!("Examples:");
-    println!("  (+ 1 2 3)              => 6");
-    println!("  (/ 22 7)               => 22/7 (exact rational)");
-    println!("  (define square (lambda (x) (* x x)))");
-    println!("  (square 5)             => 25");
-    println!(
-        "  (define fib (lambda (n) (if (= n 0) 0 (if (= n 1) 1 (+ (fib (- n 1)) (fib (- n 2)))))))"
-    );
-    println!("  (fib 10)               => 55");
-    println!("  '(1 2 3)               => (1 2 3)");
-    println!("  (car '(a b c))         => a");
-    println!();
+use alloc::format;
+use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use core::cell::RefCell;
+use core::cmp::Ordering;
+use core::hash::BuildHasherDefault;
+use hashbrown::HashMap;
+use rustc_hash::FxHasher;
 
-    loop {
-        print!("lisp> ");
-        io::stdout().flush().unwrap();
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        let input = input.trim();
-
-        if input.is_empty() {
-            continue;
-        }
-
-        if input == "exit" || input == "quit" {
-            println!("Goodbye!");
-            break;
-        }
-
-        match parse(input) {
-            Ok(expr) => match eval(expr, &mut env) {
-                Ok(result) => println!("{}", result.to_string()),
-                Err(e) => println!("Error: {}", e),
-            },
-            Err(e) => println!("Parse error: {}", e),
-        }
-    }
-}
+type FxHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 // ============================================================================
 // Optimized Value Type - Lambda is now a Rust closure
@@ -71,8 +33,8 @@ pub enum Value {
 }
 
 // Manual Debug implementation since closures don't implement Debug
-impl std::fmt::Debug for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Value {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Value::Number(n) => write!(f, "Number({:?})", n),
             Value::Symbol(s) => write!(f, "Symbol({:?})", s),
@@ -191,7 +153,15 @@ fn list_to_string(val: &Value) -> String {
         }
     }
 
-    format!("({})", items.join(" "))
+    let mut result = String::from("(");
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            result.push(' ');
+        }
+        result.push_str(item);
+    }
+    result.push(')');
+    result
 }
 
 // Helper function to get length of a list
@@ -348,7 +318,7 @@ impl Number {
         }
     }
 
-    pub fn cmp(&self, other: &Number) -> std::cmp::Ordering {
+    pub fn cmp(&self, other: &Number) -> Ordering {
         match (self, other) {
             (Number::Integer(a), Number::Integer(b)) => a.cmp(b),
             (Number::Integer(a), Number::Rational(num, den)) => (a * den).cmp(num),
@@ -420,14 +390,14 @@ pub type EnvRef = Rc<RefCell<Env>>;
 
 #[derive(Debug, Clone)]
 pub struct Env {
-    vars: HashMap<String, ValRef>,
+    vars: FxHashMap<String, ValRef>,
     parent: Option<EnvRef>,
 }
 
 impl Env {
     pub fn new() -> EnvRef {
         let mut env = Self {
-            vars: HashMap::new(),
+            vars: FxHashMap::default(),
             parent: None,
         };
         env.register_builtins();
@@ -436,7 +406,7 @@ impl Env {
 
     pub fn with_parent(parent: EnvRef) -> EnvRef {
         let env = Self {
-            vars: HashMap::new(),
+            vars: FxHashMap::default(),
             parent: Some(parent),
         };
         Rc::new(RefCell::new(env))
@@ -492,6 +462,49 @@ enum Token {
     Quote,
 }
 
+fn parse_i64(s: &str) -> Result<i64, ()> {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return Err(());
+    }
+
+    let (negative, start) = if bytes[0] == b'-' {
+        if bytes.len() == 1 {
+            return Err(()); // Just a minus sign
+        }
+        (true, 1)
+    } else if bytes[0] == b'+' {
+        if bytes.len() == 1 {
+            return Err(()); // Just a plus sign
+        }
+        (false, 1)
+    } else {
+        (false, 0)
+    };
+
+    if bytes[start..].is_empty() {
+        return Err(());
+    }
+
+    let mut result: i64 = 0;
+    for &b in &bytes[start..] {
+        if !(b'0'..=b'9').contains(&b) {
+            return Err(());
+        }
+        let digit = (b - b'0') as i64;
+        result = result
+            .checked_mul(10)
+            .and_then(|r| r.checked_add(digit))
+            .ok_or(())?;
+    }
+
+    if negative {
+        result.checked_neg().ok_or(())
+    } else {
+        Ok(result)
+    }
+}
+
 fn tokenize(input: &str) -> Result<Vec<Token>, String> {
     let mut tokens = Vec::new();
     let mut chars = input.chars().peekable();
@@ -545,21 +558,28 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     chars.next();
                 }
 
+                if atom.is_empty() {
+                    continue;
+                }
+
+                // Try to parse as rational (num/den)
                 if atom.contains('/') {
-                    let parts: Vec<&str> = atom.split('/').collect();
-                    if parts.len() == 2 {
-                        if let (Ok(num), Ok(den)) =
-                            (parts[0].parse::<i64>(), parts[1].parse::<i64>())
-                        {
+                    let mut parts = atom.split('/');
+                    if let (Some(num_str), Some(den_str), None) =
+                        (parts.next(), parts.next(), parts.next())
+                    {
+                        if let (Ok(num), Ok(den)) = (parse_i64(num_str), parse_i64(den_str)) {
                             tokens.push(Token::Rational(num, den));
                             continue;
                         }
                     }
                 }
 
-                if let Ok(num) = atom.parse::<i64>() {
+                // Try to parse as integer
+                if let Ok(num) = parse_i64(&atom) {
                     tokens.push(Token::Number(num));
                 } else {
+                    // It's a symbol
                     tokens.push(Token::Symbol(atom));
                 }
             }
@@ -588,7 +608,7 @@ fn parse_tokens(tokens: &[Token]) -> Result<(ValRef, usize), String> {
                 return Err("Quote requires an expression".to_string());
             }
             let (val, consumed) = parse_tokens(&tokens[1..])?;
-            let quoted = val_list(vec![val_symbol("quote"), val]);
+            let quoted = val_list(Vec::from([val_symbol("quote"), val]));
             Ok((quoted, consumed + 1))
         }
         Token::LParen => {
@@ -811,7 +831,7 @@ fn builtin_eq(args: &[ValRef]) -> Result<ValRef, String> {
     }
     let a = args[0].as_number_exact().ok_or("= requires numbers")?;
     let b = args[1].as_number_exact().ok_or("= requires numbers")?;
-    Ok(val_bool(a.cmp(b) == std::cmp::Ordering::Equal))
+    Ok(val_bool(a.cmp(b) == Ordering::Equal))
 }
 
 fn builtin_lt(args: &[ValRef]) -> Result<ValRef, String> {
@@ -820,7 +840,7 @@ fn builtin_lt(args: &[ValRef]) -> Result<ValRef, String> {
     }
     let a = args[0].as_number_exact().ok_or("< requires numbers")?;
     let b = args[1].as_number_exact().ok_or("< requires numbers")?;
-    Ok(val_bool(a.cmp(b) == std::cmp::Ordering::Less))
+    Ok(val_bool(a.cmp(b) == Ordering::Less))
 }
 
 fn builtin_gt(args: &[ValRef]) -> Result<ValRef, String> {
@@ -829,7 +849,7 @@ fn builtin_gt(args: &[ValRef]) -> Result<ValRef, String> {
     }
     let a = args[0].as_number_exact().ok_or("> requires numbers")?;
     let b = args[1].as_number_exact().ok_or("> requires numbers")?;
-    Ok(val_bool(a.cmp(b) == std::cmp::Ordering::Greater))
+    Ok(val_bool(a.cmp(b) == Ordering::Greater))
 }
 
 fn builtin_list(args: &[ValRef]) -> Result<ValRef, String> {
@@ -899,60 +919,67 @@ fn builtin_reverse(args: &[ValRef]) -> Result<ValRef, String> {
     Ok(val_list(vec))
 }
 
-use std::time::Instant;
+// ============================================================================
+// Public API for no_std environments
+// ============================================================================
 
-fn main() {
-    let env = Env::new();
+/// Create a new environment with all built-in functions registered
+pub fn create_env() -> EnvRef {
+    Env::new()
+}
 
-    // Quick test
-    let result = parse("(+ 1 2 3)").unwrap();
-    let result = eval(result, &env).unwrap();
-    println!("Result: {}", result.to_string());
+/// Parse and evaluate a Lisp expression string
+pub fn eval_str(input: &str, env: &EnvRef) -> Result<String, String> {
+    let expr = parse(input)?;
+    let result = eval(expr, env)?;
+    Ok(result.to_string())
+}
 
-    // Test lambda
-    println!("\nTesting lambda:");
-    let _ = eval(parse("(define square (lambda (x) (* x x)))").unwrap(), &env).unwrap();
-    let result = eval(parse("(square 5)").unwrap(), &env).unwrap();
-    println!("(square 5) = {}", result.to_string());
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // Test recursive fibonacci
-    println!("\nTesting recursive fib:");
-    let fib_def = r#"
-        (define fib
-            (lambda (n)
-                (if (= n 0)
-                    0
-                    (if (= n 1)
-                        1
-                        (+ (fib (- n 1)) (fib (- n 2)))
+    #[test]
+    fn test_basic_arithmetic() {
+        let env = create_env();
+        assert_eq!(eval_str("(+ 1 2 3)", &env).unwrap(), "6");
+        assert_eq!(eval_str("(* 2 3 4)", &env).unwrap(), "24");
+        assert_eq!(eval_str("(- 10 3)", &env).unwrap(), "7");
+        assert_eq!(eval_str("(/ 22 7)", &env).unwrap(), "22/7");
+    }
+
+    #[test]
+    fn test_lambda() {
+        let env = create_env();
+        eval_str("(define square (lambda (x) (* x x)))", &env).unwrap();
+        assert_eq!(eval_str("(square 5)", &env).unwrap(), "25");
+    }
+
+    #[test]
+    fn test_recursive_fib() {
+        let env = create_env();
+        let fib_def = r#"
+            (define fib
+                (lambda (n)
+                    (if (= n 0)
+                        0
+                        (if (= n 1)
+                            1
+                            (+ (fib (- n 1)) (fib (- n 2)))
+                        )
                     )
                 )
             )
-        )
-    "#;
-    let _ = eval(parse(fib_def).unwrap(), &env).unwrap();
+        "#;
+        eval_str(fib_def, &env).unwrap();
+        assert_eq!(eval_str("(fib 10)", &env).unwrap(), "55");
+    }
 
-    // Time the fibonacci execution
-    let start = Instant::now();
-    let result = eval(parse("(fib 10)").unwrap(), &env).unwrap();
-    let duration = start.elapsed();
-
-    println!("(fib 10) = {}", result.to_string());
-    println!("Time taken: {:?}", duration);
-
-    // You could also test with larger values to see the exponential time growth
-    println!("\nTesting fib with larger value:");
-    let start = Instant::now();
-    let result = eval(parse("(fib 15)").unwrap(), &env).unwrap();
-    let duration = start.elapsed();
-    println!("(fib 15) = {}", result.to_string());
-    println!("Time taken: {:?}", duration);
-
-    // Even larger - this will be noticeably slower
-    println!("\nTesting fib with even larger value:");
-    let start = Instant::now();
-    let result = eval(parse("(fib 30)").unwrap(), &env).unwrap();
-    let duration = start.elapsed();
-    println!("(fib 30) = {}", result.to_string());
-    println!("Time taken: {:?}", duration);
+    #[test]
+    fn test_list_operations() {
+        let env = create_env();
+        assert_eq!(eval_str("(car '(1 2 3))", &env).unwrap(), "1");
+        assert_eq!(eval_str("(cdr '(1 2 3))", &env).unwrap(), "(2 3)");
+        assert_eq!(eval_str("(length '(1 2 3 4))", &env).unwrap(), "4");
+    }
 }

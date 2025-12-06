@@ -3,4 +3,12 @@ name = "ruthe"
 version = "0.1.0"
 edition = "2024"
 
+# This makes it a library
+[lib]
+name = "ruthe"  # Name of the library (optional, defaults to package name)
+crate-type = ["lib"]  # Can also include "cdylib", "staticlib", etc. as needed
+# path = "src/lib.rs"  # Optional: custom path to lib file (defaults to src/lib.rs)
+
 [dependencies]
+hashbrown = { version = "0.16.1", features = ["inline-more"],  default-features = false }
+rustc-hash = { version = "2.1", default-features = false }
