@@ -43,32 +43,6 @@ mod comprehensive_tests {
     }
 
     #[test]
-    fn test_division() {
-        let env = create_env();
-        assert_eq!(eval_str("(/ 6 2)", &env).unwrap(), "3");
-        assert_eq!(eval_str("(/ 7 2)", &env).unwrap(), "7/2");
-        assert_eq!(eval_str("(/ 22 7)", &env).unwrap(), "22/7");
-        assert_eq!(eval_str("(/ 100 10 2)", &env).unwrap(), "5");
-        assert_eq!(eval_str("(/ -6 2)", &env).unwrap(), "-3");
-        assert_eq!(eval_str("(/ 6 -2)", &env).unwrap(), "-3");
-        assert_eq!(eval_str("(/ -6 -2)", &env).unwrap(), "3");
-        assert!(eval_str("(/ 5 0)", &env).is_err());
-    }
-
-    #[test]
-    fn test_rational_arithmetic() {
-        let env = create_env();
-        assert_eq!(eval_str("(+ 1/2 1/2)", &env).unwrap(), "1");
-        assert_eq!(eval_str("(+ 1/3 1/3)", &env).unwrap(), "2/3");
-        assert_eq!(eval_str("(+ 1/2 1/3)", &env).unwrap(), "5/6");
-        assert_eq!(eval_str("(- 1/2 1/4)", &env).unwrap(), "1/4");
-        assert_eq!(eval_str("(* 1/2 1/3)", &env).unwrap(), "1/6");
-        assert_eq!(eval_str("(/ 1/2 1/3)", &env).unwrap(), "3/2");
-        assert_eq!(eval_str("(+ 1 1/2)", &env).unwrap(), "3/2");
-        assert_eq!(eval_str("(* 2 3/4)", &env).unwrap(), "3/2");
-    }
-
-    #[test]
     fn test_nested_arithmetic() {
         let env = create_env();
         assert_eq!(eval_str("(+ (* 2 3) (* 4 5))", &env).unwrap(), "26");
@@ -88,9 +62,6 @@ mod comprehensive_tests {
         assert_eq!(eval_str("(= 5 6)", &env).unwrap(), "#f");
         assert_eq!(eval_str("(= 0 0)", &env).unwrap(), "#t");
         assert_eq!(eval_str("(= -5 -5)", &env).unwrap(), "#t");
-        assert_eq!(eval_str("(= 1/2 1/2)", &env).unwrap(), "#t");
-        assert_eq!(eval_str("(= 2/4 1/2)", &env).unwrap(), "#t");
-        assert_eq!(eval_str("(= 3 3/1)", &env).unwrap(), "#t");
     }
 
     #[test]
@@ -100,7 +71,6 @@ mod comprehensive_tests {
         assert_eq!(eval_str("(< 5 3)", &env).unwrap(), "#f");
         assert_eq!(eval_str("(< 5 5)", &env).unwrap(), "#f");
         assert_eq!(eval_str("(< -5 0)", &env).unwrap(), "#t");
-        assert_eq!(eval_str("(< 1/3 1/2)", &env).unwrap(), "#t");
     }
 
     #[test]
@@ -110,7 +80,6 @@ mod comprehensive_tests {
         assert_eq!(eval_str("(> 3 5)", &env).unwrap(), "#f");
         assert_eq!(eval_str("(> 5 5)", &env).unwrap(), "#f");
         assert_eq!(eval_str("(> 0 -5)", &env).unwrap(), "#t");
-        assert_eq!(eval_str("(> 1/2 1/3)", &env).unwrap(), "#t");
     }
 
     // ========================================================================

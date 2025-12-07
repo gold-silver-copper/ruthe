@@ -177,6 +177,12 @@ fn main() {
     );
     println!("{}", "-".repeat(60));
 
+    let complex_expr = "((define countdown (lambda (n) 
+  (if (= n 0) 
+    0 
+    (countdown (- n 1)))))
+(countdown 10000000))";
+    benchmark_expression("Countdown", complex_expr, &env, 1);
     let mut last_duration = 0u128;
     for n in [5, 10, 15, 20, 25] {
         let expr = format!("(fib {})", n);

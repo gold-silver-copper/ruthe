@@ -10,3 +10,5 @@ crate-type = ["lib"]  # Can also include "cdylib", "staticlib", etc. as needed
 # path = "src/lib.rs"  # Optional: custom path to lib file (defaults to src/lib.rs)
 
 [dependencies]
+hashbrown = { version = "0.16.1", default-features = false }
+rustc-hash = { version = "2.1.1", default-features = false }

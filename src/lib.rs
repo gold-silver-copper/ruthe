@@ -8,35 +8,56 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::cmp::Ordering;
+use core::hash::BuildHasherDefault;
+use hashbrown::HashMap;
+use rustc_hash::FxHasher;
+
+// Type alias for our hash map with FxHasher
+type FxHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 // ============================================================================
-// Optimized Value Type - Lambda is now a Rust closure
+// Trampoline System for Proper TCO
+// ============================================================================
+
+/// Result of an evaluation that may need to continue
+pub enum EvalResult {
+    /// Final value - evaluation is complete
+    Done(ValRef),
+    /// Tail call - continue evaluating with new expr and env
+    TailCall(ValRef, EnvRef),
+}
+
+// ============================================================================
+// Optimized Value Type - Lambda now stores body and params for TCO
 // ============================================================================
 
 pub type BuiltinFn = fn(&[ValRef]) -> Result<ValRef, String>;
-pub type ClosureFn = Rc<dyn Fn(&[ValRef]) -> Result<ValRef, String>>;
 
 #[derive(Clone)]
 pub enum Value {
-    Number(Number),
+    Number(i64),
     Symbol(String),
     Bool(bool),
     Cons(ValRef, ValRef), // Traditional cons: (car . cdr)
     Builtin(BuiltinFn),
-    Closure(ClosureFn),
+    Lambda {
+        params: Vec<String>,
+        body: ValRef,
+        env: EnvRef,
+    },
     Nil,
 }
 
-// Manual Debug implementation since closures don't implement Debug
+// Manual Debug implementation
 impl core::fmt::Debug for Value {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Value::Number(n) => write!(f, "Number({:?})", n),
+            Value::Number(n) => write!(f, "Number({})", n),
             Value::Symbol(s) => write!(f, "Symbol({:?})", s),
             Value::Bool(b) => write!(f, "Bool({:?})", b),
             Value::Cons(car, cdr) => write!(f, "Cons({:?}, {:?})", car, cdr),
             Value::Builtin(_) => write!(f, "Builtin(<fn>)"),
-            Value::Closure(_) => write!(f, "Closure(<fn>)"),
+            Value::Lambda { .. } => write!(f, "Lambda(<fn>)"),
             Value::Nil => write!(f, "Nil"),
         }
     }
@@ -52,7 +73,7 @@ impl Value {
             Value::Bool(_) => "bool",
             Value::Cons(_, _) => "cons",
             Value::Builtin(_) => "builtin",
-            Value::Closure(_) => "closure",
+            Value::Lambda { .. } => "lambda",
             Value::Nil => "nil",
         }
     }
@@ -64,16 +85,9 @@ impl Value {
         }
     }
 
-    pub fn as_number(&self) -> Option<f64> {
+    pub fn as_number(&self) -> Option<i64> {
         match self {
-            Value::Number(n) => Some(n.to_f64()),
-            _ => None,
-        }
-    }
-
-    pub fn as_number_exact(&self) -> Option<&Number> {
-        match self {
-            Value::Number(n) => Some(n),
+            Value::Number(n) => Some(*n),
             _ => None,
         }
     }
@@ -99,15 +113,15 @@ impl Value {
         }
     }
 
-    pub fn as_closure(&self) -> Option<&ClosureFn> {
+    pub fn as_lambda(&self) -> Option<(&Vec<String>, &ValRef, &EnvRef)> {
         match self {
-            Value::Closure(f) => Some(f),
+            Value::Lambda { params, body, env } => Some((params, body, env)),
             _ => None,
         }
     }
 
     pub fn is_callable(&self) -> bool {
-        matches!(self, Value::Builtin(_) | Value::Closure(_))
+        matches!(self, Value::Builtin(_) | Value::Lambda { .. })
     }
 
     pub fn is_nil(&self) -> bool {
@@ -116,12 +130,12 @@ impl Value {
 
     pub fn to_string(&self) -> String {
         match self {
-            Value::Number(n) => n.to_string(),
+            Value::Number(n) => format!("{}", n),
             Value::Symbol(s) => s.clone(),
             Value::Bool(b) => if *b { "#t" } else { "#f" }.to_string(),
             Value::Cons(_, _) => list_to_string(self),
             Value::Builtin(_) => "<builtin>".to_string(),
-            Value::Closure(_) => "<closure>".to_string(),
+            Value::Lambda { .. } => "<lambda>".to_string(),
             Value::Nil => "nil".to_string(),
         }
     }
@@ -201,151 +215,10 @@ fn list_to_vec(val: &Value) -> Vec<ValRef> {
 }
 
 // ============================================================================
-// Number Type - Exact arithmetic with integers and rationals
-// ============================================================================
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Number {
-    Integer(i64),
-    Rational(i64, i64),
-}
-
-impl Number {
-    pub fn integer(n: i64) -> Self {
-        Number::Integer(n)
-    }
-
-    pub fn rational(num: i64, den: i64) -> Self {
-        if den == 0 {
-            panic!("Division by zero in rational");
-        }
-        if num == 0 {
-            return Number::Integer(0);
-        }
-
-        let gcd = Self::gcd(num.abs(), den.abs());
-        let num = num / gcd;
-        let den = den / gcd;
-
-        let (num, den) = if den < 0 { (-num, -den) } else { (num, den) };
-
-        if den == 1 {
-            Number::Integer(num)
-        } else {
-            Number::Rational(num, den)
-        }
-    }
-
-    pub fn gcd(mut a: i64, mut b: i64) -> i64 {
-        while b != 0 {
-            let t = b;
-            b = a % b;
-            a = t;
-        }
-        a
-    }
-
-    pub fn to_f64(&self) -> f64 {
-        match self {
-            Number::Integer(n) => *n as f64,
-            Number::Rational(num, den) => (*num as f64) / (*den as f64),
-        }
-    }
-
-    pub fn add(&self, other: &Number) -> Number {
-        match (self, other) {
-            (Number::Integer(a), Number::Integer(b)) => Number::Integer(a + b),
-            (Number::Integer(a), Number::Rational(num, den))
-            | (Number::Rational(num, den), Number::Integer(a)) => {
-                Number::rational(a * den + num, *den)
-            }
-            (Number::Rational(n1, d1), Number::Rational(n2, d2)) => {
-                Number::rational(n1 * d2 + n2 * d1, d1 * d2)
-            }
-        }
-    }
-
-    pub fn sub(&self, other: &Number) -> Number {
-        match (self, other) {
-            (Number::Integer(a), Number::Integer(b)) => Number::Integer(a - b),
-            (Number::Integer(a), Number::Rational(num, den)) => {
-                Number::rational(a * den - num, *den)
-            }
-            (Number::Rational(num, den), Number::Integer(a)) => {
-                Number::rational(num - a * den, *den)
-            }
-            (Number::Rational(n1, d1), Number::Rational(n2, d2)) => {
-                Number::rational(n1 * d2 - n2 * d1, d1 * d2)
-            }
-        }
-    }
-
-    pub fn mul(&self, other: &Number) -> Number {
-        match (self, other) {
-            (Number::Integer(a), Number::Integer(b)) => Number::Integer(a * b),
-            (Number::Integer(a), Number::Rational(num, den))
-            | (Number::Rational(num, den), Number::Integer(a)) => Number::rational(a * num, *den),
-            (Number::Rational(n1, d1), Number::Rational(n2, d2)) => {
-                Number::rational(n1 * n2, d1 * d2)
-            }
-        }
-    }
-
-    pub fn div(&self, other: &Number) -> Result<Number, String> {
-        match (self, other) {
-            (_, Number::Integer(0)) => Err("Division by zero".to_string()),
-            (Number::Integer(a), Number::Integer(b)) => {
-                if a % b == 0 {
-                    Ok(Number::Integer(a / b))
-                } else {
-                    Ok(Number::rational(*a, *b))
-                }
-            }
-            (Number::Integer(a), Number::Rational(num, den)) => Ok(Number::rational(a * den, *num)),
-            (Number::Rational(num, den), Number::Integer(b)) => Ok(Number::rational(*num, den * b)),
-            (Number::Rational(n1, d1), Number::Rational(n2, d2)) => {
-                Ok(Number::rational(n1 * d2, d1 * n2))
-            }
-        }
-    }
-
-    pub fn neg(&self) -> Number {
-        match self {
-            Number::Integer(n) => Number::Integer(-n),
-            Number::Rational(num, den) => Number::Rational(-num, *den),
-        }
-    }
-
-    pub fn cmp(&self, other: &Number) -> Ordering {
-        match (self, other) {
-            (Number::Integer(a), Number::Integer(b)) => a.cmp(b),
-            (Number::Integer(a), Number::Rational(num, den)) => (a * den).cmp(num),
-            (Number::Rational(num, den), Number::Integer(b)) => num.cmp(&(b * den)),
-            (Number::Rational(n1, d1), Number::Rational(n2, d2)) => (n1 * d2).cmp(&(n2 * d1)),
-        }
-    }
-
-    pub fn to_string(&self) -> String {
-        match self {
-            Number::Integer(n) => format!("{}", n),
-            Number::Rational(num, den) => format!("{}/{}", num, den),
-        }
-    }
-}
-
-// ============================================================================
 // Constructors
 // ============================================================================
 
 pub fn val_number(n: i64) -> ValRef {
-    Rc::new(Value::Number(Number::integer(n)))
-}
-
-pub fn val_rational(num: i64, den: i64) -> ValRef {
-    Rc::new(Value::Number(Number::rational(num, den)))
-}
-
-pub fn val_number_from_num(n: Number) -> ValRef {
     Rc::new(Value::Number(n))
 }
 
@@ -372,8 +245,8 @@ pub fn val_builtin(f: BuiltinFn) -> ValRef {
     Rc::new(Value::Builtin(f))
 }
 
-pub fn val_closure(f: ClosureFn) -> ValRef {
-    Rc::new(Value::Closure(f))
+pub fn val_lambda(params: Vec<String>, body: ValRef, env: EnvRef) -> ValRef {
+    Rc::new(Value::Lambda { params, body, env })
 }
 
 pub fn val_nil() -> ValRef {
@@ -381,21 +254,21 @@ pub fn val_nil() -> ValRef {
 }
 
 // ============================================================================
-// Environment - Now uses RefCell for interior mutability
+// Environment - Now uses HashMap with FxHasher
 // ============================================================================
 
 pub type EnvRef = Rc<RefCell<Env>>;
 
 #[derive(Debug, Clone)]
 pub struct Env {
-    bindings: ValRef, // Association list: ((sym . val) (sym . val) ...)
+    bindings: FxHashMap<String, ValRef>,
     parent: Option<EnvRef>,
 }
 
 impl Env {
     pub fn new() -> EnvRef {
         let mut env = Self {
-            bindings: val_nil(),
+            bindings: FxHashMap::default(),
             parent: None,
         };
         env.register_builtins();
@@ -404,39 +277,20 @@ impl Env {
 
     pub fn with_parent(parent: EnvRef) -> EnvRef {
         let env = Self {
-            bindings: val_nil(),
+            bindings: FxHashMap::default(),
             parent: Some(parent),
         };
         Rc::new(RefCell::new(env))
     }
 
     pub fn set(&mut self, name: String, v: ValRef) {
-        // Create a new binding pair: (symbol . value)
-        let binding = val_cons(val_symbol(&name), v);
-        // Prepend to bindings list
-        self.bindings = val_cons(binding, Rc::clone(&self.bindings));
+        self.bindings.insert(name, v);
     }
 
     pub fn get(&self, name: &str) -> Option<ValRef> {
-        // Search through association list
-        let mut current = self.bindings.as_ref();
-
-        loop {
-            match current {
-                Value::Cons(car, cdr) => {
-                    // Each binding is (symbol . value)
-                    if let Some((sym, val)) = car.as_cons() {
-                        if let Some(s) = sym.as_symbol() {
-                            if s == name {
-                                return Some(Rc::clone(val));
-                            }
-                        }
-                    }
-                    current = cdr.as_ref();
-                }
-                Value::Nil => break,
-                _ => break,
-            }
+        // Check current environment
+        if let Some(val) = self.bindings.get(name) {
+            return Some(Rc::clone(val));
         }
 
         // Not found in current env, try parent
@@ -477,7 +331,6 @@ enum Token {
     RParen,
     Symbol(String),
     Number(i64),
-    Rational(i64, i64),
     Bool(bool),
     Quote,
 }
@@ -582,19 +435,6 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     continue;
                 }
 
-                // Try to parse as rational (num/den)
-                if atom.contains('/') {
-                    let mut parts = atom.split('/');
-                    if let (Some(num_str), Some(den_str), None) =
-                        (parts.next(), parts.next(), parts.next())
-                    {
-                        if let (Ok(num), Ok(den)) = (parse_i64(num_str), parse_i64(den_str)) {
-                            tokens.push(Token::Rational(num, den));
-                            continue;
-                        }
-                    }
-                }
-
                 // Try to parse as integer
                 if let Ok(num) = parse_i64(&atom) {
                     tokens.push(Token::Number(num));
@@ -620,7 +460,6 @@ fn parse_tokens(tokens: &[Token]) -> Result<(ValRef, usize), String> {
 
     match &tokens[0] {
         Token::Number(n) => Ok((val_number(*n), 1)),
-        Token::Rational(num, den) => Ok((val_rational(*num, *den), 1)),
         Token::Bool(b) => Ok((val_bool(*b), 1)),
         Token::Symbol(s) => Ok((val_symbol(s), 1)),
         Token::Quote => {
@@ -662,21 +501,42 @@ pub fn parse(input: &str) -> Result<ValRef, String> {
     Ok(val)
 }
 
+pub fn parse_multiple(input: &str) -> Result<Vec<ValRef>, String> {
+    let tokens = tokenize(input)?;
+    if tokens.is_empty() {
+        return Err("Empty input".to_string());
+    }
+
+    let mut expressions = Vec::new();
+    let mut pos = 0;
+
+    while pos < tokens.len() {
+        let (val, consumed) = parse_tokens(&tokens[pos..])?;
+        expressions.push(val);
+        pos += consumed;
+    }
+
+    Ok(expressions)
+}
+
 // ============================================================================
-// Evaluator - Now works with EnvRef (Rc<RefCell<Env>>)
+// Evaluator - With Proper Tail Call Optimization via Trampoline
 // ============================================================================
 
-pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
+fn eval_step(expr: ValRef, env: &EnvRef) -> Result<EvalResult, String> {
     match expr.as_ref() {
-        Value::Number(_) | Value::Bool(_) | Value::Nil | Value::Builtin(_) | Value::Closure(_) => {
-            Ok(Rc::clone(&expr))
-        }
+        Value::Number(_)
+        | Value::Bool(_)
+        | Value::Nil
+        | Value::Builtin(_)
+        | Value::Lambda { .. } => Ok(EvalResult::Done(Rc::clone(&expr))),
         Value::Symbol(s) => {
             if s == "nil" {
-                return Ok(val_nil());
+                return Ok(EvalResult::Done(val_nil()));
             }
             env.borrow()
                 .get(s)
+                .map(EvalResult::Done)
                 .ok_or_else(|| format!("Unbound symbol: {}", s))
         }
         Value::Cons(car, cdr) => {
@@ -693,7 +553,7 @@ pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
                             .ok_or("define requires symbol as first arg")?;
                         let val = eval(Rc::clone(&items[2]), env)?;
                         env.borrow_mut().set(name.to_string(), Rc::clone(&val));
-                        return Ok(val);
+                        return Ok(EvalResult::Done(val));
                     }
                     "lambda" => {
                         let items = list_to_vec(expr.as_ref());
@@ -714,33 +574,9 @@ pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
                         let params = params?;
 
                         let body = Rc::clone(&items[2]);
-
-                        // Capture the environment by reference (Rc)
                         let captured_env = Rc::clone(env);
 
-                        // Create a Rust closure that captures the environment and body
-                        let closure = move |args: &[ValRef]| -> Result<ValRef, String> {
-                            if args.len() != params.len() {
-                                return Err(format!(
-                                    "Lambda expects {} arguments, got {}",
-                                    params.len(),
-                                    args.len()
-                                ));
-                            }
-
-                            // Create new environment with captured env as parent
-                            let lambda_env = Env::with_parent(Rc::clone(&captured_env));
-
-                            // Bind parameters
-                            for (param, arg) in params.iter().zip(args.iter()) {
-                                lambda_env.borrow_mut().set(param.clone(), Rc::clone(arg));
-                            }
-
-                            // Evaluate body
-                            eval(Rc::clone(&body), &lambda_env)
-                        };
-
-                        return Ok(val_closure(Rc::new(closure)));
+                        return Ok(EvalResult::Done(val_lambda(params, body, captured_env)));
                     }
                     "if" => {
                         let items = list_to_vec(expr.as_ref());
@@ -753,14 +589,18 @@ pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
                             Value::Nil => false,
                             _ => true,
                         };
-                        return eval(Rc::clone(&items[if is_true { 2 } else { 3 }]), env);
+                        // Tail call: return the branch to evaluate
+                        return Ok(EvalResult::TailCall(
+                            Rc::clone(&items[if is_true { 2 } else { 3 }]),
+                            Rc::clone(env),
+                        ));
                     }
                     "quote" => {
                         let items = list_to_vec(expr.as_ref());
                         if items.len() != 2 {
                             return Err("quote requires 1 argument".to_string());
                         }
-                        return Ok(Rc::clone(&items[1]));
+                        return Ok(EvalResult::Done(Rc::clone(&items[1])));
                     }
                     _ => {}
                 }
@@ -783,14 +623,52 @@ pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
                 }
             }
 
-            // Call builtin or closure
+            // Call function
             match func.as_ref() {
-                Value::Builtin(f) => f(&args),
-                Value::Closure(f) => f(&args),
+                Value::Builtin(f) => Ok(EvalResult::Done(f(&args)?)),
+                Value::Lambda {
+                    params,
+                    body,
+                    env: lambda_env,
+                } => {
+                    if args.len() != params.len() {
+                        return Err(format!(
+                            "Lambda expects {} arguments, got {}",
+                            params.len(),
+                            args.len()
+                        ));
+                    }
+
+                    // Create new environment with lambda's captured env as parent
+                    let call_env = Env::with_parent(Rc::clone(lambda_env));
+
+                    // Bind parameters
+                    for (param, arg) in params.iter().zip(args.iter()) {
+                        call_env.borrow_mut().set(param.clone(), Rc::clone(arg));
+                    }
+
+                    // Tail call: evaluate body in new environment
+                    Ok(EvalResult::TailCall(Rc::clone(body), call_env))
+                }
                 _ => Err(format!("Cannot call non-function: {}", func.to_string())),
             }
         }
-        Value::Nil => Ok(val_nil()),
+        Value::Nil => Ok(EvalResult::Done(val_nil())),
+    }
+}
+
+pub fn eval(mut expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
+    let mut current_env = Rc::clone(env);
+
+    loop {
+        match eval_step(expr, &current_env)? {
+            EvalResult::Done(val) => return Ok(val),
+            EvalResult::TailCall(new_expr, new_env) => {
+                expr = new_expr;
+                current_env = new_env;
+                // Continue loop - this is the key to TCO!
+            }
+        }
     }
 }
 
@@ -799,77 +677,80 @@ pub fn eval(expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
 // ============================================================================
 
 fn builtin_add(args: &[ValRef]) -> Result<ValRef, String> {
-    let mut result = Number::integer(0);
+    let mut result: i64 = 0;
     for arg in args {
-        let num = arg.as_number_exact().ok_or("+ requires numbers")?;
-        result = result.add(num);
+        let num = arg.as_number().ok_or("+ requires numbers")?;
+        result = result.checked_add(num).ok_or("Integer overflow")?;
     }
-    Ok(val_number_from_num(result))
+    Ok(val_number(result))
 }
 
 fn builtin_sub(args: &[ValRef]) -> Result<ValRef, String> {
     if args.is_empty() {
         return Err("- requires at least 1 argument".to_string());
     }
-    let first = args[0].as_number_exact().ok_or("- requires numbers")?;
+    let first = args[0].as_number().ok_or("- requires numbers")?;
     if args.len() == 1 {
-        return Ok(val_number_from_num(first.neg()));
+        return Ok(val_number(first.checked_neg().ok_or("Integer overflow")?));
     }
-    let mut result = first.clone();
+    let mut result = first;
     for arg in &args[1..] {
-        let num = arg.as_number_exact().ok_or("- requires numbers")?;
-        result = result.sub(num);
+        let num = arg.as_number().ok_or("- requires numbers")?;
+        result = result.checked_sub(num).ok_or("Integer overflow")?;
     }
-    Ok(val_number_from_num(result))
+    Ok(val_number(result))
 }
 
 fn builtin_mul(args: &[ValRef]) -> Result<ValRef, String> {
-    let mut result = Number::integer(1);
+    let mut result: i64 = 1;
     for arg in args {
-        let num = arg.as_number_exact().ok_or("* requires numbers")?;
-        result = result.mul(num);
+        let num = arg.as_number().ok_or("* requires numbers")?;
+        result = result.checked_mul(num).ok_or("Integer overflow")?;
     }
-    Ok(val_number_from_num(result))
+    Ok(val_number(result))
 }
 
 fn builtin_div(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() < 2 {
         return Err("/ requires at least 2 arguments".to_string());
     }
-    let first = args[0].as_number_exact().ok_or("/ requires numbers")?;
-    let mut result = first.clone();
+    let first = args[0].as_number().ok_or("/ requires numbers")?;
+    let mut result = first;
     for arg in &args[1..] {
-        let num = arg.as_number_exact().ok_or("/ requires numbers")?;
-        result = result.div(num)?;
+        let num = arg.as_number().ok_or("/ requires numbers")?;
+        if num == 0 {
+            return Err("Division by zero".to_string());
+        }
+        result = result.checked_div(num).ok_or("Integer overflow")?;
     }
-    Ok(val_number_from_num(result))
+    Ok(val_number(result))
 }
 
 fn builtin_eq(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 2 {
         return Err("= requires 2 arguments".to_string());
     }
-    let a = args[0].as_number_exact().ok_or("= requires numbers")?;
-    let b = args[1].as_number_exact().ok_or("= requires numbers")?;
-    Ok(val_bool(a.cmp(b) == Ordering::Equal))
+    let a = args[0].as_number().ok_or("= requires numbers")?;
+    let b = args[1].as_number().ok_or("= requires numbers")?;
+    Ok(val_bool(a == b))
 }
 
 fn builtin_lt(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 2 {
         return Err("< requires 2 arguments".to_string());
     }
-    let a = args[0].as_number_exact().ok_or("< requires numbers")?;
-    let b = args[1].as_number_exact().ok_or("< requires numbers")?;
-    Ok(val_bool(a.cmp(b) == Ordering::Less))
+    let a = args[0].as_number().ok_or("< requires numbers")?;
+    let b = args[1].as_number().ok_or("< requires numbers")?;
+    Ok(val_bool(a < b))
 }
 
 fn builtin_gt(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 2 {
         return Err("> requires 2 arguments".to_string());
     }
-    let a = args[0].as_number_exact().ok_or("> requires numbers")?;
-    let b = args[1].as_number_exact().ok_or("> requires numbers")?;
-    Ok(val_bool(a.cmp(b) == Ordering::Greater))
+    let a = args[0].as_number().ok_or("> requires numbers")?;
+    let b = args[1].as_number().ok_or("> requires numbers")?;
+    Ok(val_bool(a > b))
 }
 
 fn builtin_list(args: &[ValRef]) -> Result<ValRef, String> {
@@ -953,4 +834,19 @@ pub fn eval_str(input: &str, env: &EnvRef) -> Result<String, String> {
     let expr = parse(input)?;
     let result = eval(expr, env)?;
     Ok(result.to_string())
+}
+
+/// Parse and evaluate multiple Lisp expressions, returning the last result
+pub fn eval_str_multiple(input: &str, env: &EnvRef) -> Result<String, String> {
+    let expressions = parse_multiple(input)?;
+    if expressions.is_empty() {
+        return Err("No expressions to evaluate".to_string());
+    }
+
+    let mut last_result = val_nil();
+    for expr in expressions {
+        last_result = eval(expr, env)?;
+    }
+
+    Ok(last_result.to_string())
 }
