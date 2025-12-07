@@ -1,11 +1,8 @@
 // examples/benchmark.rs
 // Run with: cargo run --example benchmark --release
 
+use ruthe::{EnvRef, eval_str};
 use std::time::Instant;
-
-// Assuming your lisp interpreter is in a crate called "lisp_interpreter"
-// Adjust the use statement based on your actual crate name
-use ruthe::{create_env, eval_str};
 
 fn format_duration(nanos: u128) -> String {
     if nanos < 1_000 {
@@ -19,7 +16,7 @@ fn format_duration(nanos: u128) -> String {
     }
 }
 
-fn benchmark_expression(name: &str, expr: &str, env: &ruthe::EnvRef, iterations: usize) {
+fn benchmark_expression(name: &str, expr: &str, env: &EnvRef, iterations: usize) {
     let mut times = Vec::with_capacity(iterations);
 
     for _ in 0..iterations {
@@ -47,8 +44,8 @@ fn benchmark_expression(name: &str, expr: &str, env: &ruthe::EnvRef, iterations:
 fn main() {
     println!("=== Lisp Interpreter Benchmarks ===\n");
 
-    // Create environment
-    let env = create_env();
+    // Create environment using new API
+    let env = EnvRef::new();
 
     // Define fibonacci function
     let fib_def = r#"
@@ -169,6 +166,43 @@ fn main() {
     let complex_expr = "(+ (* 2 3) (/ 10 2) (- 8 3))";
     benchmark_expression("Complex arithmetic", complex_expr, &env, 10000);
 
+    // Tail call optimization test
+    println!("--- Tail Call Optimization Test ---");
+    let countdown_def = r#"
+        (define countdown 
+            (lambda (n) 
+                (if (= n 0) 
+                    0 
+                    (countdown (- n 1))
+                )
+            )
+        )
+    "#;
+    eval_str(countdown_def, &env).unwrap();
+
+    println!("Testing TCO with deep recursion (should not overflow):");
+    let test_sizes = [1000, 10000, 100000, 1000000];
+    for size in test_sizes {
+        let expr = format!("(countdown {})", size);
+        let start = Instant::now();
+        match eval_str(&expr, &env) {
+            Ok(result) => {
+                let duration = start.elapsed();
+                println!(
+                    "  countdown({:>7}) = {} | Time: {}",
+                    size,
+                    result,
+                    format_duration(duration.as_nanos())
+                );
+            }
+            Err(e) => {
+                println!("  countdown({:>7}) FAILED: {}", size, e);
+                break;
+            }
+        }
+    }
+    println!();
+
     // Performance scaling analysis
     println!("--- Performance Scaling (fib) ---");
     println!(
@@ -177,14 +211,8 @@ fn main() {
     );
     println!("{}", "-".repeat(60));
 
-    let complex_expr = "((define countdown (lambda (n) 
-  (if (= n 0) 
-    0 
-    (countdown (- n 1)))))
-(countdown 10000000))";
-    benchmark_expression("Countdown", complex_expr, &env, 1);
     let mut last_duration = 0u128;
-    for n in [5, 10, 15, 20, 25] {
+    for n in [5, 10, 15, 20, 35] {
         let expr = format!("(fib {})", n);
         let start = Instant::now();
         let result = eval_str(&expr, &env).unwrap();
@@ -206,4 +234,6 @@ fn main() {
 
         last_duration = duration;
     }
+
+    println!("\n=== Benchmark Complete ===");
 }
