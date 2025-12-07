@@ -7,7 +7,6 @@ use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use core::cmp::Ordering;
 use core::hash::BuildHasherDefault;
 use hashbrown::HashMap;
 use rustc_hash::FxHasher;
@@ -525,11 +524,9 @@ pub fn parse_multiple(input: &str) -> Result<Vec<ValRef>, String> {
 
 fn eval_step(expr: ValRef, env: &EnvRef) -> Result<EvalResult, String> {
     match expr.as_ref() {
-        Value::Number(_)
-        | Value::Bool(_)
-        | Value::Nil
-        | Value::Builtin(_)
-        | Value::Lambda { .. } => Ok(EvalResult::Done(Rc::clone(&expr))),
+        Value::Number(_) | Value::Bool(_) | Value::Builtin(_) | Value::Lambda { .. } => {
+            Ok(EvalResult::Done(Rc::clone(&expr)))
+        }
         Value::Symbol(s) => {
             if s == "nil" {
                 return Ok(EvalResult::Done(val_nil()));
