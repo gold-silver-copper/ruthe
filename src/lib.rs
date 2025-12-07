@@ -7,12 +7,6 @@ use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use core::hash::BuildHasherDefault;
-use hashbrown::HashMap;
-use rustc_hash::FxHasher;
-
-// Type alias for our hash map with FxHasher
-type FxHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 // ============================================================================
 // Trampoline System for Proper TCO
@@ -253,21 +247,23 @@ pub fn val_nil() -> ValRef {
 }
 
 // ============================================================================
-// Environment - Now uses HashMap with FxHasher
+// Environment - Now uses Cons cells as a linked list
+// Environment is a list of ((name . value) . rest)
 // ============================================================================
 
 pub type EnvRef = Rc<RefCell<Env>>;
 
 #[derive(Debug, Clone)]
 pub struct Env {
-    bindings: FxHashMap<String, ValRef>,
+    // List of bindings: ((name . value) . rest)
+    bindings: ValRef,
     parent: Option<EnvRef>,
 }
 
 impl Env {
     pub fn new() -> EnvRef {
         let mut env = Self {
-            bindings: FxHashMap::default(),
+            bindings: val_nil(),
             parent: None,
         };
         env.register_builtins();
@@ -276,20 +272,39 @@ impl Env {
 
     pub fn with_parent(parent: EnvRef) -> EnvRef {
         let env = Self {
-            bindings: FxHashMap::default(),
+            bindings: val_nil(),
             parent: Some(parent),
         };
         Rc::new(RefCell::new(env))
     }
 
     pub fn set(&mut self, name: String, v: ValRef) {
-        self.bindings.insert(name, v);
+        // Create a binding: (name . value)
+        let binding = val_cons(val_symbol(&name), v);
+        // Prepend to bindings list
+        self.bindings = val_cons(binding, self.bindings.clone());
     }
 
     pub fn get(&self, name: &str) -> Option<ValRef> {
-        // Check current environment
-        if let Some(val) = self.bindings.get(name) {
-            return Some(Rc::clone(val));
+        // Search through bindings list
+        let mut current = self.bindings.as_ref();
+
+        loop {
+            match current {
+                Value::Cons(binding, rest) => {
+                    // binding is (name . value)
+                    if let Value::Cons(key, value) = binding.as_ref() {
+                        if let Value::Symbol(s) = key.as_ref() {
+                            if s == name {
+                                return Some(Rc::clone(value));
+                            }
+                        }
+                    }
+                    current = rest.as_ref();
+                }
+                Value::Nil => break,
+                _ => break,
+            }
         }
 
         // Not found in current env, try parent
@@ -320,6 +335,7 @@ impl Env {
         self.set("reverse".to_string(), val_builtin(builtin_reverse));
     }
 }
+
 // ============================================================================
 // Tokenizer
 // ============================================================================
