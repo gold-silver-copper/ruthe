@@ -5,7 +5,6 @@ extern crate alloc;
 use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::ops::Deref;
 
@@ -25,7 +24,7 @@ pub enum EvalResult {
 // Optimized Value Type - Lambda now stores body and params for TCO
 // ============================================================================
 
-pub type BuiltinFn = fn(&[ValRef]) -> Result<ValRef, String>;
+pub type BuiltinFn = fn(&ValRef) -> Result<ValRef, String>;
 
 #[derive(Clone)]
 pub enum Value {
@@ -35,7 +34,7 @@ pub enum Value {
     Cons(ValRef, ValRef),
     Builtin(BuiltinFn),
     Lambda {
-        params: Vec<String>,
+        params: ValRef, // Cons list of symbols
         body: ValRef,
         env: EnvRef,
     },
@@ -85,18 +84,11 @@ impl ValRef {
         Self::new(Value::Cons(car, cdr))
     }
 
-    pub fn list(items: Vec<ValRef>) -> Self {
-        items
-            .into_iter()
-            .rev()
-            .fold(Self::nil(), |acc, item| Self::cons(item, acc))
-    }
-
     pub fn builtin(f: BuiltinFn) -> Self {
         Self::new(Value::Builtin(f))
     }
 
-    pub fn lambda(params: Vec<String>, body: ValRef, env: EnvRef) -> Self {
+    pub fn lambda(params: ValRef, body: ValRef, env: EnvRef) -> Self {
         Self::new(Value::Lambda { params, body, env })
     }
 
@@ -179,7 +171,7 @@ impl Value {
         }
     }
 
-    pub fn as_lambda(&self) -> Option<(&Vec<String>, &ValRef, &EnvRef)> {
+    pub fn as_lambda(&self) -> Option<(&ValRef, &ValRef, &EnvRef)> {
         match self {
             Value::Lambda { params, body, env } => Some((params, body, env)),
             _ => None,
@@ -208,31 +200,32 @@ impl Value {
 
     // Helper function to convert a cons list to string
     fn list_to_string(&self) -> String {
-        let mut items = Vec::new();
+        let mut result = String::from("(");
         let mut current = self;
+        let mut first = true;
 
         loop {
             match current {
                 Value::Cons(car, cdr) => {
-                    items.push(car.to_string());
+                    if !first {
+                        result.push(' ');
+                    }
+                    first = false;
+                    result.push_str(&car.to_string());
                     current = cdr.as_ref();
                 }
                 Value::Nil => break,
                 _ => {
-                    items.push(".".to_string());
-                    items.push(current.to_string());
+                    if !first {
+                        result.push(' ');
+                    }
+                    result.push_str(". ");
+                    result.push_str(&current.to_string());
                     break;
                 }
             }
         }
 
-        let mut result = String::from("(");
-        for (i, item) in items.iter().enumerate() {
-            if i > 0 {
-                result.push(' ');
-            }
-            result.push_str(item);
-        }
         result.push(')');
         result
     }
@@ -256,23 +249,23 @@ impl Value {
         count
     }
 
-    // Helper function to convert list to vector
-    fn list_to_vec(&self) -> Vec<ValRef> {
-        let mut items = Vec::new();
+    // Helper to get nth element of a list
+    fn list_nth(&self, n: usize) -> Option<ValRef> {
         let mut current = self;
+        let mut idx = 0;
 
         loop {
             match current {
                 Value::Cons(car, cdr) => {
-                    items.push(car.clone());
+                    if idx == n {
+                        return Some(car.clone());
+                    }
+                    idx += 1;
                     current = cdr.as_ref();
                 }
-                Value::Nil => break,
-                _ => break,
+                _ => return None,
             }
         }
-
-        items
     }
 }
 
@@ -441,8 +434,27 @@ fn parse_i64(s: &str) -> Result<i64, ()> {
     }
 }
 
-fn tokenize(input: &str) -> Result<Vec<Token>, String> {
-    let mut tokens = Vec::new();
+// Build a cons list from tokens
+fn tokens_to_list(tokens: &[Token]) -> ValRef {
+    let mut result = ValRef::nil();
+    let mut i = tokens.len();
+    while i > 0 {
+        i -= 1;
+        let token_val = match &tokens[i] {
+            Token::LParen => ValRef::symbol("("),
+            Token::RParen => ValRef::symbol(")"),
+            Token::Symbol(s) => ValRef::symbol(s),
+            Token::Number(n) => ValRef::number(*n),
+            Token::Bool(b) => ValRef::bool_val(*b),
+            Token::Quote => ValRef::symbol("'"),
+        };
+        result = ValRef::cons(token_val, result);
+    }
+    result
+}
+
+fn tokenize(input: &str) -> Result<ValRef, String> {
+    let mut result = ValRef::nil();
     let mut chars = input.chars().peekable();
 
     while let Some(&ch) = chars.peek() {
@@ -451,15 +463,15 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 chars.next();
             }
             '(' => {
-                tokens.push(Token::LParen);
+                result = ValRef::cons(ValRef::symbol("("), result);
                 chars.next();
             }
             ')' => {
-                tokens.push(Token::RParen);
+                result = ValRef::cons(ValRef::symbol(")"), result);
                 chars.next();
             }
             '\'' => {
-                tokens.push(Token::Quote);
+                result = ValRef::cons(ValRef::symbol("'"), result);
                 chars.next();
             }
             ';' => {
@@ -474,11 +486,11 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 chars.next();
                 match chars.peek() {
                     Some(&'t') => {
-                        tokens.push(Token::Bool(true));
+                        result = ValRef::cons(ValRef::bool_val(true), result);
                         chars.next();
                     }
                     Some(&'f') => {
-                        tokens.push(Token::Bool(false));
+                        result = ValRef::cons(ValRef::bool_val(false), result);
                         chars.next();
                     }
                     _ => return Err("Invalid boolean literal".to_string()),
@@ -499,85 +511,117 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                 }
 
                 if let Ok(num) = parse_i64(&atom) {
-                    tokens.push(Token::Number(num));
+                    result = ValRef::cons(ValRef::number(num), result);
                 } else {
-                    tokens.push(Token::Symbol(atom));
+                    result = ValRef::cons(ValRef::symbol(&atom), result);
                 }
             }
         }
     }
 
-    Ok(tokens)
+    // Reverse the list to get correct order
+    Ok(reverse_list(result))
+}
+
+// Helper to reverse a cons list
+fn reverse_list(list: ValRef) -> ValRef {
+    let mut result = ValRef::nil();
+    let mut current = list.as_ref();
+
+    loop {
+        match current {
+            Value::Cons(car, cdr) => {
+                result = ValRef::cons(car.clone(), result);
+                current = cdr.as_ref();
+            }
+            Value::Nil => break,
+            _ => break,
+        }
+    }
+
+    result
 }
 
 // ============================================================================
 // Parser
 // ============================================================================
 
-fn parse_tokens(tokens: &[Token]) -> Result<(ValRef, usize), String> {
-    if tokens.is_empty() {
-        return Err("Unexpected end of input".to_string());
-    }
-
-    match &tokens[0] {
-        Token::Number(n) => Ok((ValRef::number(*n), 1)),
-        Token::Bool(b) => Ok((ValRef::bool_val(*b), 1)),
-        Token::Symbol(s) => Ok((ValRef::symbol(s), 1)),
-        Token::Quote => {
-            if tokens.len() < 2 {
-                return Err("Quote requires an expression".to_string());
-            }
-            let (val, consumed) = parse_tokens(&tokens[1..])?;
-            let quoted = ValRef::list(Vec::from([ValRef::symbol("quote"), val]));
-            Ok((quoted, consumed + 1))
-        }
-        Token::LParen => {
-            let mut items = Vec::new();
-            let mut pos = 1;
-
-            while pos < tokens.len() {
-                if tokens[pos] == Token::RParen {
-                    return Ok((ValRef::list(items), pos + 1));
+fn parse_tokens(tokens: ValRef) -> Result<(ValRef, ValRef), String> {
+    match tokens.as_ref() {
+        Value::Nil => Err("Unexpected end of input".to_string()),
+        Value::Cons(first, rest) => match first.as_ref() {
+            Value::Number(_) | Value::Bool(_) => Ok((first.clone(), rest.clone())),
+            Value::Symbol(s) if s == "'" => {
+                if let Value::Cons(next_expr, remaining) = rest.as_ref() {
+                    let (val, consumed) =
+                        parse_tokens(ValRef::cons(next_expr.clone(), remaining.clone()))?;
+                    let quoted =
+                        ValRef::cons(ValRef::symbol("quote"), ValRef::cons(val, ValRef::nil()));
+                    Ok((quoted, consumed))
+                } else {
+                    Err("Quote requires an expression".to_string())
                 }
-                let (val, consumed) = parse_tokens(&tokens[pos..])?;
-                items.push(val);
-                pos += consumed;
             }
+            Value::Symbol(s) if s == "(" => {
+                let mut items = ValRef::nil();
+                let mut pos = rest.clone();
 
-            Err("Unmatched '('".to_string())
-        }
-        Token::RParen => Err("Unexpected ')'".to_string()),
+                loop {
+                    match pos.as_ref() {
+                        Value::Nil => return Err("Unmatched '('".to_string()),
+                        Value::Cons(token, rest_tokens) => {
+                            if let Value::Symbol(s) = token.as_ref() {
+                                if s == ")" {
+                                    return Ok((reverse_list(items), rest_tokens.clone()));
+                                }
+                            }
+                            let (val, consumed) = parse_tokens(pos)?;
+                            items = ValRef::cons(val, items);
+                            pos = consumed;
+                        }
+                        _ => return Err("Invalid token stream".to_string()),
+                    }
+                }
+            }
+            Value::Symbol(s) if s == ")" => Err("Unexpected ')'".to_string()),
+            Value::Symbol(_) => Ok((first.clone(), rest.clone())),
+            _ => Err("Unexpected token type".to_string()),
+        },
+        _ => Err("Invalid token stream".to_string()),
     }
 }
 
 pub fn parse(input: &str) -> Result<ValRef, String> {
     let tokens = tokenize(input)?;
-    if tokens.is_empty() {
+    if tokens.is_nil() {
         return Err("Empty input".to_string());
     }
-    let (val, consumed) = parse_tokens(&tokens)?;
-    if consumed < tokens.len() {
+    let (val, remaining) = parse_tokens(tokens)?;
+    if !remaining.is_nil() {
         return Err("Unexpected tokens after expression".to_string());
     }
     Ok(val)
 }
 
-pub fn parse_multiple(input: &str) -> Result<Vec<ValRef>, String> {
+pub fn parse_multiple(input: &str) -> Result<ValRef, String> {
     let tokens = tokenize(input)?;
-    if tokens.is_empty() {
+    if tokens.is_nil() {
         return Err("Empty input".to_string());
     }
 
-    let mut expressions = Vec::new();
-    let mut pos = 0;
+    let mut expressions = ValRef::nil();
+    let mut pos = tokens;
 
-    while pos < tokens.len() {
-        let (val, consumed) = parse_tokens(&tokens[pos..])?;
-        expressions.push(val);
-        pos += consumed;
+    loop {
+        if pos.is_nil() {
+            break;
+        }
+        let (val, consumed) = parse_tokens(pos)?;
+        expressions = ValRef::cons(val, expressions);
+        pos = consumed;
     }
 
-    Ok(expressions)
+    Ok(reverse_list(expressions))
 }
 
 // ============================================================================
@@ -602,61 +646,78 @@ fn eval_step(expr: ValRef, env: &EnvRef) -> Result<EvalResult, String> {
             if let Value::Symbol(sym) = car.as_ref() {
                 match sym.as_str() {
                     "define" => {
-                        let items = expr.as_ref().list_to_vec();
-                        if items.len() != 3 {
+                        let len = expr.as_ref().list_len();
+                        if len != 3 {
                             return Err("define requires 2 arguments".to_string());
                         }
-                        let name = items[1]
+                        let name_val = expr.as_ref().list_nth(1).ok_or("define missing name")?;
+                        let name = name_val
                             .as_symbol()
                             .ok_or("define requires symbol as first arg")?;
-                        let val = eval(items[2].clone(), env)?;
+                        let body_val = expr.as_ref().list_nth(2).ok_or("define missing body")?;
+                        let val = eval(body_val, env)?;
                         env.borrow_mut().set(name.to_string(), val.clone());
                         return Ok(EvalResult::Done(val));
                     }
                     "lambda" => {
-                        let items = expr.as_ref().list_to_vec();
-                        if items.len() != 3 {
+                        let len = expr.as_ref().list_len();
+                        if len != 3 {
                             return Err("lambda requires 2 arguments (params body)".to_string());
                         }
 
-                        let params_list = items[1].as_ref().list_to_vec();
-                        let params: Result<Vec<String>, String> = params_list
-                            .iter()
-                            .map(|p| {
-                                p.as_symbol()
-                                    .map(|s| s.to_string())
-                                    .ok_or_else(|| "lambda params must be symbols".to_string())
-                            })
-                            .collect();
-                        let params = params?;
+                        let params_list =
+                            expr.as_ref().list_nth(1).ok_or("lambda missing params")?;
 
-                        let body = items[2].clone();
+                        // Validate all params are symbols
+                        let mut current = params_list.as_ref();
+                        loop {
+                            match current {
+                                Value::Cons(param, rest) => {
+                                    if param.as_symbol().is_none() {
+                                        return Err("lambda params must be symbols".to_string());
+                                    }
+                                    current = rest.as_ref();
+                                }
+                                Value::Nil => break,
+                                _ => return Err("lambda params must be a list".to_string()),
+                            }
+                        }
+
+                        let body = expr.as_ref().list_nth(2).ok_or("lambda missing body")?;
                         let captured_env = env.clone();
 
-                        return Ok(EvalResult::Done(ValRef::lambda(params, body, captured_env)));
+                        return Ok(EvalResult::Done(ValRef::lambda(
+                            params_list,
+                            body,
+                            captured_env,
+                        )));
                     }
                     "if" => {
-                        let items = expr.as_ref().list_to_vec();
-                        if items.len() != 4 {
+                        let len = expr.as_ref().list_len();
+                        if len != 4 {
                             return Err("if requires 3 arguments".to_string());
                         }
-                        let cond = eval(items[1].clone(), env)?;
+                        let cond_expr = expr.as_ref().list_nth(1).ok_or("if missing condition")?;
+                        let cond = eval(cond_expr, env)?;
                         let is_true = match cond.as_ref() {
                             Value::Bool(b) => *b,
                             Value::Nil => false,
                             _ => true,
                         };
-                        return Ok(EvalResult::TailCall(
-                            items[if is_true { 2 } else { 3 }].clone(),
-                            env.clone(),
-                        ));
+                        let branch_idx = if is_true { 2 } else { 3 };
+                        let branch = expr
+                            .as_ref()
+                            .list_nth(branch_idx)
+                            .ok_or("if missing branch")?;
+                        return Ok(EvalResult::TailCall(branch, env.clone()));
                     }
                     "quote" => {
-                        let items = expr.as_ref().list_to_vec();
-                        if items.len() != 2 {
+                        let len = expr.as_ref().list_len();
+                        if len != 2 {
                             return Err("quote requires 1 argument".to_string());
                         }
-                        return Ok(EvalResult::Done(items[1].clone()));
+                        let quoted = expr.as_ref().list_nth(1).ok_or("quote missing argument")?;
+                        return Ok(EvalResult::Done(quoted));
                     }
                     _ => {}
                 }
@@ -664,18 +725,21 @@ fn eval_step(expr: ValRef, env: &EnvRef) -> Result<EvalResult, String> {
 
             let func = eval(car.clone(), env)?;
 
-            let mut args = Vec::new();
+            // Evaluate all arguments
+            let mut args = ValRef::nil();
             let mut current = cdr.as_ref();
             loop {
                 match current {
                     Value::Cons(arg_car, arg_cdr) => {
-                        args.push(eval(arg_car.clone(), env)?);
+                        let evaled = eval(arg_car.clone(), env)?;
+                        args = ValRef::cons(evaled, args);
                         current = arg_cdr.as_ref();
                     }
                     Value::Nil => break,
                     _ => return Err("Malformed argument list".to_string()),
                 }
             }
+            args = reverse_list(args);
 
             match func.as_ref() {
                 Value::Builtin(f) => Ok(EvalResult::Done(f(&args)?)),
@@ -684,18 +748,37 @@ fn eval_step(expr: ValRef, env: &EnvRef) -> Result<EvalResult, String> {
                     body,
                     env: lambda_env,
                 } => {
-                    if args.len() != params.len() {
+                    // Count parameters and arguments
+                    let param_count = params.as_ref().list_len();
+                    let arg_count = args.as_ref().list_len();
+
+                    if arg_count != param_count {
                         return Err(format!(
                             "Lambda expects {} arguments, got {}",
-                            params.len(),
-                            args.len()
+                            param_count, arg_count
                         ));
                     }
 
                     let call_env = EnvRef::with_parent(lambda_env.clone());
 
-                    for (param, arg) in params.iter().zip(args.iter()) {
-                        call_env.borrow_mut().set(param.clone(), arg.clone());
+                    // Bind parameters to arguments
+                    let mut param_cur = params.as_ref();
+                    let mut arg_cur = args.as_ref();
+
+                    loop {
+                        match (param_cur, arg_cur) {
+                            (Value::Cons(p_car, p_cdr), Value::Cons(a_car, a_cdr)) => {
+                                if let Value::Symbol(param_name) = p_car.as_ref() {
+                                    call_env.borrow_mut().set(param_name.clone(), a_car.clone());
+                                }
+                                param_cur = p_cdr.as_ref();
+                                arg_cur = a_cdr.as_ref();
+                            }
+                            (Value::Nil, Value::Nil) => break,
+                            _ => {
+                                return Err("Parameter/argument mismatch".to_string());
+                            }
+                        }
                     }
 
                     Ok(EvalResult::TailCall(body.clone(), call_env))
@@ -725,150 +808,245 @@ pub fn eval(mut expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
 // Built-in Functions
 // ============================================================================
 
-fn builtin_add(args: &[ValRef]) -> Result<ValRef, String> {
+fn builtin_add(args: &ValRef) -> Result<ValRef, String> {
     let mut result: i64 = 0;
-    for arg in args {
-        let num = arg.as_number().ok_or("+ requires numbers")?;
-        result = result.checked_add(num).ok_or("Integer overflow")?;
+    let mut current = args.as_ref();
+
+    loop {
+        match current {
+            Value::Cons(car, cdr) => {
+                let num = car.as_number().ok_or("+ requires numbers")?;
+                result = result.checked_add(num).ok_or("Integer overflow")?;
+                current = cdr.as_ref();
+            }
+            Value::Nil => break,
+            _ => return Err("Invalid argument list".to_string()),
+        }
     }
+
     Ok(ValRef::number(result))
 }
 
-fn builtin_sub(args: &[ValRef]) -> Result<ValRef, String> {
-    if args.is_empty() {
+fn builtin_sub(args: &ValRef) -> Result<ValRef, String> {
+    let len = args.as_ref().list_len();
+    if len == 0 {
         return Err("- requires at least 1 argument".to_string());
     }
-    let first = args[0].as_number().ok_or("- requires numbers")?;
-    if args.len() == 1 {
+
+    let first = args
+        .as_ref()
+        .list_nth(0)
+        .ok_or("- missing first argument")?;
+    let first_num = first.as_number().ok_or("- requires numbers")?;
+
+    if len == 1 {
         return Ok(ValRef::number(
-            first.checked_neg().ok_or("Integer overflow")?,
+            first_num.checked_neg().ok_or("Integer overflow")?,
         ));
     }
-    let mut result = first;
-    for arg in &args[1..] {
-        let num = arg.as_number().ok_or("- requires numbers")?;
-        result = result.checked_sub(num).ok_or("Integer overflow")?;
+
+    let mut result = first_num;
+    let mut current = args.as_ref();
+    if let Value::Cons(_, rest) = current {
+        current = rest.as_ref();
     }
+
+    loop {
+        match current {
+            Value::Cons(car, cdr) => {
+                let num = car.as_number().ok_or("- requires numbers")?;
+                result = result.checked_sub(num).ok_or("Integer overflow")?;
+                current = cdr.as_ref();
+            }
+            Value::Nil => break,
+            _ => return Err("Invalid argument list".to_string()),
+        }
+    }
+
     Ok(ValRef::number(result))
 }
 
-fn builtin_mul(args: &[ValRef]) -> Result<ValRef, String> {
+fn builtin_mul(args: &ValRef) -> Result<ValRef, String> {
     let mut result: i64 = 1;
-    for arg in args {
-        let num = arg.as_number().ok_or("* requires numbers")?;
-        result = result.checked_mul(num).ok_or("Integer overflow")?;
+    let mut current = args.as_ref();
+
+    loop {
+        match current {
+            Value::Cons(car, cdr) => {
+                let num = car.as_number().ok_or("* requires numbers")?;
+                result = result.checked_mul(num).ok_or("Integer overflow")?;
+                current = cdr.as_ref();
+            }
+            Value::Nil => break,
+            _ => return Err("Invalid argument list".to_string()),
+        }
     }
+
     Ok(ValRef::number(result))
 }
 
-fn builtin_div(args: &[ValRef]) -> Result<ValRef, String> {
-    if args.len() < 2 {
+fn builtin_div(args: &ValRef) -> Result<ValRef, String> {
+    let len = args.as_ref().list_len();
+    if len < 2 {
         return Err("/ requires at least 2 arguments".to_string());
     }
-    let first = args[0].as_number().ok_or("/ requires numbers")?;
-    let mut result = first;
-    for arg in &args[1..] {
-        let num = arg.as_number().ok_or("/ requires numbers")?;
-        if num == 0 {
-            return Err("Division by zero".to_string());
-        }
-        result = result.checked_div(num).ok_or("Integer overflow")?;
+
+    let first = args
+        .as_ref()
+        .list_nth(0)
+        .ok_or("/ missing first argument")?;
+    let mut result = first.as_number().ok_or("/ requires numbers")?;
+
+    let mut current = args.as_ref();
+    if let Value::Cons(_, rest) = current {
+        current = rest.as_ref();
     }
+
+    loop {
+        match current {
+            Value::Cons(car, cdr) => {
+                let num = car.as_number().ok_or("/ requires numbers")?;
+                if num == 0 {
+                    return Err("Division by zero".to_string());
+                }
+                result = result.checked_div(num).ok_or("Integer overflow")?;
+                current = cdr.as_ref();
+            }
+            Value::Nil => break,
+            _ => return Err("Invalid argument list".to_string()),
+        }
+    }
+
     Ok(ValRef::number(result))
 }
 
-fn builtin_eq(args: &[ValRef]) -> Result<ValRef, String> {
-    if args.len() != 2 {
+fn builtin_eq(args: &ValRef) -> Result<ValRef, String> {
+    if args.as_ref().list_len() != 2 {
         return Err("= requires 2 arguments".to_string());
     }
-    let a = args[0].as_number().ok_or("= requires numbers")?;
-    let b = args[1].as_number().ok_or("= requires numbers")?;
-    Ok(ValRef::bool_val(a == b))
+    let a = args.as_ref().list_nth(0).ok_or("= missing arg 1")?;
+    let b = args.as_ref().list_nth(1).ok_or("= missing arg 2")?;
+    let a_num = a.as_number().ok_or("= requires numbers")?;
+    let b_num = b.as_number().ok_or("= requires numbers")?;
+    Ok(ValRef::bool_val(a_num == b_num))
 }
 
-fn builtin_lt(args: &[ValRef]) -> Result<ValRef, String> {
-    if args.len() != 2 {
+fn builtin_lt(args: &ValRef) -> Result<ValRef, String> {
+    if args.as_ref().list_len() != 2 {
         return Err("< requires 2 arguments".to_string());
     }
-    let a = args[0].as_number().ok_or("< requires numbers")?;
-    let b = args[1].as_number().ok_or("< requires numbers")?;
-    Ok(ValRef::bool_val(a < b))
+    let a = args.as_ref().list_nth(0).ok_or("< missing arg 1")?;
+    let b = args.as_ref().list_nth(1).ok_or("< missing arg 2")?;
+    let a_num = a.as_number().ok_or("< requires numbers")?;
+    let b_num = b.as_number().ok_or("< requires numbers")?;
+    Ok(ValRef::bool_val(a_num < b_num))
 }
 
-fn builtin_gt(args: &[ValRef]) -> Result<ValRef, String> {
-    if args.len() != 2 {
+fn builtin_gt(args: &ValRef) -> Result<ValRef, String> {
+    if args.as_ref().list_len() != 2 {
         return Err("> requires 2 arguments".to_string());
     }
-    let a = args[0].as_number().ok_or("> requires numbers")?;
-    let b = args[1].as_number().ok_or("> requires numbers")?;
-    Ok(ValRef::bool_val(a > b))
+    let a = args.as_ref().list_nth(0).ok_or("> missing arg 1")?;
+    let b = args.as_ref().list_nth(1).ok_or("> missing arg 2")?;
+    let a_num = a.as_number().ok_or("> requires numbers")?;
+    let b_num = b.as_number().ok_or("> requires numbers")?;
+    Ok(ValRef::bool_val(a_num > b_num))
 }
 
-fn builtin_list(args: &[ValRef]) -> Result<ValRef, String> {
-    Ok(ValRef::list(args.to_vec()))
+fn builtin_list(args: &ValRef) -> Result<ValRef, String> {
+    Ok(args.clone())
 }
 
-fn builtin_car(args: &[ValRef]) -> Result<ValRef, String> {
-    if args.len() != 1 {
+fn builtin_car(args: &ValRef) -> Result<ValRef, String> {
+    if args.as_ref().list_len() != 1 {
         return Err("car requires 1 argument".to_string());
     }
-    let (car, _) = args[0].as_cons().ok_or("car requires a cons/list")?;
+    let list = args.as_ref().list_nth(0).ok_or("car missing argument")?;
+    let (car, _) = list.as_cons().ok_or("car requires a cons/list")?;
     Ok(car.clone())
 }
 
-fn builtin_cdr(args: &[ValRef]) -> Result<ValRef, String> {
-    if args.len() != 1 {
+fn builtin_cdr(args: &ValRef) -> Result<ValRef, String> {
+    if args.as_ref().list_len() != 1 {
         return Err("cdr requires 1 argument".to_string());
     }
-    let (_, cdr) = args[0].as_cons().ok_or("cdr requires a cons/list")?;
+    let list = args.as_ref().list_nth(0).ok_or("cdr missing argument")?;
+    let (_, cdr) = list.as_cons().ok_or("cdr requires a cons/list")?;
     Ok(cdr.clone())
 }
 
-fn builtin_cons_fn(args: &[ValRef]) -> Result<ValRef, String> {
-    if args.len() != 2 {
+fn builtin_cons_fn(args: &ValRef) -> Result<ValRef, String> {
+    if args.as_ref().list_len() != 2 {
         return Err("cons requires 2 arguments".to_string());
     }
-    Ok(ValRef::cons(args[0].clone(), args[1].clone()))
+    let car = args.as_ref().list_nth(0).ok_or("cons missing arg 1")?;
+    let cdr = args.as_ref().list_nth(1).ok_or("cons missing arg 2")?;
+    Ok(ValRef::cons(car, cdr))
 }
 
-fn builtin_null(args: &[ValRef]) -> Result<ValRef, String> {
-    if args.len() != 1 {
+fn builtin_null(args: &ValRef) -> Result<ValRef, String> {
+    if args.as_ref().list_len() != 1 {
         return Err("null? requires 1 argument".to_string());
     }
-    Ok(ValRef::bool_val(args[0].is_nil()))
+    let val = args.as_ref().list_nth(0).ok_or("null? missing argument")?;
+    Ok(ValRef::bool_val(val.is_nil()))
 }
 
-fn builtin_cons_p(args: &[ValRef]) -> Result<ValRef, String> {
-    if args.len() != 1 {
+fn builtin_cons_p(args: &ValRef) -> Result<ValRef, String> {
+    if args.as_ref().list_len() != 1 {
         return Err("cons? requires 1 argument".to_string());
     }
-    Ok(ValRef::bool_val(args[0].as_cons().is_some()))
+    let val = args.as_ref().list_nth(0).ok_or("cons? missing argument")?;
+    Ok(ValRef::bool_val(val.as_cons().is_some()))
 }
 
-fn builtin_length(args: &[ValRef]) -> Result<ValRef, String> {
-    if args.len() != 1 {
+fn builtin_length(args: &ValRef) -> Result<ValRef, String> {
+    if args.as_ref().list_len() != 1 {
         return Err("length requires 1 argument".to_string());
     }
-    let len = args[0].as_ref().list_len();
+    let list = args.as_ref().list_nth(0).ok_or("length missing argument")?;
+    let len = list.as_ref().list_len();
     Ok(ValRef::number(len as i64))
 }
 
-fn builtin_append(args: &[ValRef]) -> Result<ValRef, String> {
-    let mut result = Vec::new();
-    for arg in args {
-        let items = arg.as_ref().list_to_vec();
-        result.extend(items);
+fn builtin_append(args: &ValRef) -> Result<ValRef, String> {
+    let mut result = ValRef::nil();
+    let mut current = args.as_ref();
+
+    // Collect all items from all lists
+    loop {
+        match current {
+            Value::Cons(list, rest) => {
+                let mut list_cur = list.as_ref();
+                loop {
+                    match list_cur {
+                        Value::Cons(item, item_rest) => {
+                            result = ValRef::cons(item.clone(), result);
+                            list_cur = item_rest.as_ref();
+                        }
+                        Value::Nil => break,
+                        _ => break,
+                    }
+                }
+                current = rest.as_ref();
+            }
+            Value::Nil => break,
+            _ => return Err("Invalid argument list".to_string()),
+        }
     }
-    Ok(ValRef::list(result))
+
+    Ok(reverse_list(result))
 }
 
-fn builtin_reverse(args: &[ValRef]) -> Result<ValRef, String> {
-    if args.len() != 1 {
+fn builtin_reverse(args: &ValRef) -> Result<ValRef, String> {
+    if args.as_ref().list_len() != 1 {
         return Err("reverse requires 1 argument".to_string());
     }
-    let mut vec = args[0].as_ref().list_to_vec();
-    vec.reverse();
-    Ok(ValRef::list(vec))
+    let list = args
+        .as_ref()
+        .list_nth(0)
+        .ok_or("reverse missing argument")?;
+    Ok(reverse_list(list))
 }
 
 // ============================================================================
@@ -885,13 +1063,22 @@ pub fn eval_str(input: &str, env: &EnvRef) -> Result<String, String> {
 /// Parse and evaluate multiple Lisp expressions, returning the last result
 pub fn eval_str_multiple(input: &str, env: &EnvRef) -> Result<String, String> {
     let expressions = parse_multiple(input)?;
-    if expressions.is_empty() {
+    if expressions.is_nil() {
         return Err("No expressions to evaluate".to_string());
     }
 
     let mut last_result = ValRef::nil();
-    for expr in expressions {
-        last_result = eval(expr, env)?;
+    let mut current = expressions.as_ref();
+
+    loop {
+        match current {
+            Value::Cons(expr, rest) => {
+                last_result = eval(expr.clone(), env)?;
+                current = rest.as_ref();
+            }
+            Value::Nil => break,
+            _ => return Err("Invalid expression list".to_string()),
+        }
     }
 
     Ok(last_result.to_string())
