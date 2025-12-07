@@ -1,395 +1,479 @@
 #![no_std]
 
-extern crate alloc;
-
-use alloc::format;
-use alloc::rc::Rc;
-use alloc::string::{String, ToString};
 use core::cell::RefCell;
-use core::ops::Deref;
 
 // ============================================================================
-// Trampoline System for Proper TCO
+// Arena Allocator
 // ============================================================================
 
-/// Result of an evaluation that may need to continue
-pub enum EvalResult {
-    /// Final value - evaluation is complete
-    Done(ValRef),
-    /// Tail call - continue evaluating with new expr and env
-    TailCall(ValRef, EnvRef),
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ArenaError {
+    OutOfMemory,
+    InvalidIndex,
+}
+
+pub struct Arena<const N: usize> {
+    cells: RefCell<[Value; N]>,
+    next_free: RefCell<usize>,
+}
+
+impl<const N: usize> Arena<N> {
+    pub const fn new() -> Self {
+        Arena {
+            cells: RefCell::new([Value::Nil; N]),
+            next_free: RefCell::new(0),
+        }
+    }
+
+    pub fn alloc(&self, value: Value) -> Result<ValRef, ArenaError> {
+        let mut next = self.next_free.borrow_mut();
+        if *next >= N {
+            return Err(ArenaError::OutOfMemory);
+        }
+        let index = *next;
+        *next += 1;
+        self.cells.borrow_mut()[index] = value;
+        Ok(ValRef(index))
+    }
+
+    pub fn get(&self, index: ValRef) -> Value {
+        self.cells.borrow()[index.0]
+    }
+
+    pub fn set(&self, index: ValRef, value: Value) {
+        self.cells.borrow_mut()[index.0] = value;
+    }
+
+    pub fn reset(&self) {
+        *self.next_free.borrow_mut() = 0;
+        for cell in self.cells.borrow_mut().iter_mut() {
+            *cell = Value::Nil;
+        }
+    }
+    pub fn capacity(&self) -> usize {
+        N
+    }
+
+    pub fn available(&self) -> usize {
+        N - *self.next_free.borrow()
+    }
+    pub fn used(&self) -> usize {
+        *self.next_free.borrow()
+    }
 }
 
 // ============================================================================
-// Optimized Value Type - Lambda now stores body and params for TCO
+// Value Types
 // ============================================================================
 
-pub type BuiltinFn = fn(&ValRef) -> Result<ValRef, String>;
+// Store builtin function index instead of function pointer
+pub type BuiltinId = u8;
 
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Value {
     Number(i64),
-    Symbol(String),
+    Symbol(StrRef),
     Bool(bool),
+    Char(char),
     Cons(ValRef, ValRef),
-    Builtin(BuiltinFn),
+    Builtin(BuiltinId),
     Lambda {
-        params: ValRef, // Cons list of symbols
+        params: ValRef,
         body: ValRef,
         env: EnvRef,
     },
     Nil,
 }
 
-// Manual Debug implementation
-impl core::fmt::Debug for Value {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Value::Number(n) => write!(f, "Number({})", n),
-            Value::Symbol(s) => write!(f, "Symbol({:?})", s),
-            Value::Bool(b) => write!(f, "Bool({:?})", b),
-            Value::Cons(car, cdr) => write!(f, "Cons({:?}, {:?})", car, cdr),
-            Value::Builtin(_) => write!(f, "Builtin(<fn>)"),
-            Value::Lambda { .. } => write!(f, "Lambda(<fn>)"),
-            Value::Nil => write!(f, "Nil"),
+// ============================================================================
+// String representation as index into string storage
+// ============================================================================
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StrRef(usize);
+
+const MAX_STRINGS: usize = 512;
+const MAX_STRING_LEN: usize = 64;
+
+pub struct StringTable {
+    strings: RefCell<[[u8; MAX_STRING_LEN]; MAX_STRINGS]>,
+    lengths: RefCell<[usize; MAX_STRINGS]>,
+    next_free: RefCell<usize>,
+}
+
+impl StringTable {
+    pub const fn new() -> Self {
+        StringTable {
+            strings: RefCell::new([[0; MAX_STRING_LEN]; MAX_STRINGS]),
+            lengths: RefCell::new([0; MAX_STRINGS]),
+            next_free: RefCell::new(0),
         }
+    }
+
+    pub fn intern(&self, s: &str) -> Result<StrRef, ()> {
+        let bytes = s.as_bytes();
+        if bytes.len() > MAX_STRING_LEN {
+            return Err(());
+        }
+
+        // Check if string already exists
+        let next = *self.next_free.borrow();
+        let strings = self.strings.borrow();
+        let lengths = self.lengths.borrow();
+
+        for i in 0..next {
+            if lengths[i] == bytes.len() {
+                let mut matches = true;
+                for j in 0..bytes.len() {
+                    if strings[i][j] != bytes[j] {
+                        matches = false;
+                        break;
+                    }
+                }
+                if matches {
+                    return Ok(StrRef(i));
+                }
+            }
+        }
+
+        // Add new string
+        drop(strings);
+        drop(lengths);
+
+        let mut next = self.next_free.borrow_mut();
+        if *next >= MAX_STRINGS {
+            return Err(());
+        }
+
+        let index = *next;
+        *next += 1;
+
+        let mut strings = self.strings.borrow_mut();
+        let mut lengths = self.lengths.borrow_mut();
+
+        for (i, &b) in bytes.iter().enumerate() {
+            strings[index][i] = b;
+        }
+        lengths[index] = bytes.len();
+
+        Ok(StrRef(index))
+    }
+
+    pub fn get<'a>(&self, s: StrRef, buf: &'a mut [u8]) -> Result<&'a str, ()> {
+        let strings = self.strings.borrow();
+        let lengths = self.lengths.borrow();
+        let len = lengths[s.0];
+
+        if len > buf.len() {
+            return Err(());
+        }
+
+        for i in 0..len {
+            buf[i] = strings[s.0][i];
+        }
+
+        core::str::from_utf8(&buf[..len]).map_err(|_| ())
+    }
+
+    pub fn eq(&self, a: StrRef, b: StrRef) -> bool {
+        a.0 == b.0
+    }
+
+    pub fn reset(&self) {
+        *self.next_free.borrow_mut() = 0;
     }
 }
 
 // ============================================================================
-// ValRef - Newtype wrapper around Rc<Value>
+// ValRef - Index into arena
 // ============================================================================
 
-#[derive(Clone, Debug)]
-pub struct ValRef(Rc<Value>);
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ValRef(usize);
 
 impl ValRef {
-    pub fn new(value: Value) -> Self {
-        ValRef(Rc::new(value))
+    pub const fn nil() -> Self {
+        ValRef(usize::MAX)
     }
 
-    pub fn number(n: i64) -> Self {
-        Self::new(Value::Number(n))
-    }
-
-    pub fn symbol(s: &str) -> Self {
-        Self::new(Value::Symbol(s.to_string()))
-    }
-
-    pub fn bool_val(b: bool) -> Self {
-        Self::new(Value::Bool(b))
-    }
-
-    pub fn cons(car: ValRef, cdr: ValRef) -> Self {
-        Self::new(Value::Cons(car, cdr))
-    }
-
-    pub fn builtin(f: BuiltinFn) -> Self {
-        Self::new(Value::Builtin(f))
-    }
-
-    pub fn lambda(params: ValRef, body: ValRef, env: EnvRef) -> Self {
-        Self::new(Value::Lambda { params, body, env })
-    }
-
-    pub fn nil() -> Self {
-        Self::new(Value::Nil)
-    }
-}
-
-impl Deref for ValRef {
-    type Target = Value;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl AsRef<Value> for ValRef {
-    fn as_ref(&self) -> &Value {
-        &self.0
-    }
-}
-
-impl From<Value> for ValRef {
-    fn from(value: Value) -> Self {
-        ValRef::new(value)
-    }
-}
-
-impl From<Rc<Value>> for ValRef {
-    fn from(rc: Rc<Value>) -> Self {
-        ValRef(rc)
-    }
-}
-
-impl Value {
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            Value::Number(_) => "number",
-            Value::Symbol(_) => "symbol",
-            Value::Bool(_) => "bool",
-            Value::Cons(_, _) => "cons",
-            Value::Builtin(_) => "builtin",
-            Value::Lambda { .. } => "lambda",
-            Value::Nil => "nil",
-        }
-    }
-
-    pub fn as_bool(&self) -> Option<bool> {
-        match self {
-            Value::Bool(b) => Some(*b),
-            _ => None,
-        }
-    }
-
-    pub fn as_number(&self) -> Option<i64> {
-        match self {
-            Value::Number(n) => Some(*n),
-            _ => None,
-        }
-    }
-
-    pub fn as_symbol(&self) -> Option<&str> {
-        match self {
-            Value::Symbol(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    pub fn as_cons(&self) -> Option<(&ValRef, &ValRef)> {
-        match self {
-            Value::Cons(car, cdr) => Some((car, cdr)),
-            _ => None,
-        }
-    }
-
-    pub fn as_builtin(&self) -> Option<BuiltinFn> {
-        match self {
-            Value::Builtin(f) => Some(*f),
-            _ => None,
-        }
-    }
-
-    pub fn as_lambda(&self) -> Option<(&ValRef, &ValRef, &EnvRef)> {
-        match self {
-            Value::Lambda { params, body, env } => Some((params, body, env)),
-            _ => None,
-        }
-    }
-
-    pub fn is_callable(&self) -> bool {
-        matches!(self, Value::Builtin(_) | Value::Lambda { .. })
-    }
-
-    pub fn is_nil(&self) -> bool {
-        matches!(self, Value::Nil)
-    }
-
-    pub fn to_string(&self) -> String {
-        match self {
-            Value::Number(n) => format!("{}", n),
-            Value::Symbol(s) => s.clone(),
-            Value::Bool(b) => if *b { "#t" } else { "#f" }.to_string(),
-            Value::Cons(_, _) => self.list_to_string(),
-            Value::Builtin(_) => "<builtin>".to_string(),
-            Value::Lambda { .. } => "<lambda>".to_string(),
-            Value::Nil => "nil".to_string(),
-        }
-    }
-
-    // Helper function to convert a cons list to string
-    fn list_to_string(&self) -> String {
-        let mut result = String::from("(");
-        let mut current = self;
-        let mut first = true;
-
-        loop {
-            match current {
-                Value::Cons(car, cdr) => {
-                    if !first {
-                        result.push(' ');
-                    }
-                    first = false;
-                    result.push_str(&car.to_string());
-                    current = cdr.as_ref();
-                }
-                Value::Nil => break,
-                _ => {
-                    if !first {
-                        result.push(' ');
-                    }
-                    result.push_str(". ");
-                    result.push_str(&current.to_string());
-                    break;
-                }
-            }
-        }
-
-        result.push(')');
-        result
-    }
-
-    // Helper function to get length of a list
-    fn list_len(&self) -> usize {
-        let mut count = 0;
-        let mut current = self;
-
-        loop {
-            match current {
-                Value::Cons(_, cdr) => {
-                    count += 1;
-                    current = cdr.as_ref();
-                }
-                Value::Nil => break,
-                _ => break,
-            }
-        }
-
-        count
-    }
-
-    // Helper to get nth element of a list
-    fn list_nth(&self, n: usize) -> Option<ValRef> {
-        let mut current = self;
-        let mut idx = 0;
-
-        loop {
-            match current {
-                Value::Cons(car, cdr) => {
-                    if idx == n {
-                        return Some(car.clone());
-                    }
-                    idx += 1;
-                    current = cdr.as_ref();
-                }
-                _ => return None,
-            }
-        }
+    pub fn is_nil(self) -> bool {
+        self.0 == usize::MAX
     }
 }
 
 // ============================================================================
-// Environment - Now uses Cons cells as a linked list
+// Environment
 // ============================================================================
 
-#[derive(Clone, Debug)]
-pub struct EnvRef(Rc<RefCell<Env>>);
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EnvRef(pub usize);
 
-#[derive(Debug, Clone)]
-pub struct Env {
+const MAX_ENVS: usize = 256;
+
+#[derive(Clone, Copy, Debug)]
+struct Env {
     bindings: ValRef,
     parent: Option<EnvRef>,
 }
 
-impl EnvRef {
-    pub fn new() -> Self {
-        let mut env = Env {
-            bindings: ValRef::nil(),
-            parent: None,
-        };
-        env.register_builtins();
-        EnvRef(Rc::new(RefCell::new(env)))
+pub struct EnvTable {
+    envs: RefCell<[Env; MAX_ENVS]>,
+    next_free: RefCell<usize>,
+}
+
+impl EnvTable {
+    pub const fn new() -> Self {
+        EnvTable {
+            envs: RefCell::new(
+                [Env {
+                    bindings: ValRef::nil(),
+                    parent: None,
+                }; MAX_ENVS],
+            ),
+            next_free: RefCell::new(0),
+        }
     }
 
-    pub fn with_parent(parent: EnvRef) -> Self {
-        let env = Env {
-            bindings: ValRef::nil(),
-            parent: Some(parent),
-        };
-        EnvRef(Rc::new(RefCell::new(env)))
+    pub fn alloc(&self, bindings: ValRef, parent: Option<EnvRef>) -> Result<EnvRef, ()> {
+        let mut next = self.next_free.borrow_mut();
+        if *next >= MAX_ENVS {
+            return Err(());
+        }
+        let index = *next;
+        *next += 1;
+        self.envs.borrow_mut()[index] = Env { bindings, parent };
+        Ok(EnvRef(index))
     }
 
-    pub fn borrow(&self) -> core::cell::Ref<Env> {
-        self.0.borrow()
+    pub fn get_bindings(&self, e: EnvRef) -> ValRef {
+        self.envs.borrow()[e.0].bindings
     }
 
-    pub fn borrow_mut(&self) -> core::cell::RefMut<Env> {
-        self.0.borrow_mut()
+    pub fn set_bindings(&self, e: EnvRef, bindings: ValRef) {
+        self.envs.borrow_mut()[e.0].bindings = bindings;
+    }
+
+    pub fn get_parent(&self, e: EnvRef) -> Option<EnvRef> {
+        self.envs.borrow()[e.0].parent
+    }
+
+    pub fn reset(&self) {
+        *self.next_free.borrow_mut() = 0;
     }
 }
 
-impl Deref for EnvRef {
-    type Target = Rc<RefCell<Env>>;
+// ============================================================================
+// Interpreter Context
+// ============================================================================
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+pub struct Interpreter<const N: usize> {
+    pub arena: Arena<N>,
+    pub strings: StringTable,
+    pub envs: EnvTable,
 }
 
-impl From<Rc<RefCell<Env>>> for EnvRef {
-    fn from(rc: Rc<RefCell<Env>>) -> Self {
-        EnvRef(rc)
-    }
-}
-
-impl Env {
-    pub fn set(&mut self, name: String, v: ValRef) {
-        let binding = ValRef::cons(ValRef::symbol(&name), v);
-        self.bindings = ValRef::cons(binding, self.bindings.clone());
+impl<const N: usize> Interpreter<N> {
+    pub const fn new() -> Self {
+        Interpreter {
+            arena: Arena::new(),
+            strings: StringTable::new(),
+            envs: EnvTable::new(),
+        }
     }
 
-    pub fn get(&self, name: &str) -> Option<ValRef> {
-        let mut current = self.bindings.as_ref();
+    pub fn reset(&self) {
+        self.arena.reset();
+        self.strings.reset();
+        self.envs.reset();
+    }
 
-        loop {
-            match current {
+    // Helper to create a cons cell
+    pub fn cons(&self, car: ValRef, cdr: ValRef) -> Result<ValRef, ArenaError> {
+        self.arena.alloc(Value::Cons(car, cdr))
+    }
+
+    // Helper to get list length
+    pub fn list_len(&self, mut list: ValRef) -> usize {
+        let mut count = 0;
+        while !list.is_nil() {
+            match self.arena.get(list) {
+                Value::Cons(_, cdr) => {
+                    count += 1;
+                    list = cdr;
+                }
+                _ => break,
+            }
+        }
+        count
+    }
+
+    // Helper to get nth element
+    pub fn list_nth(&self, mut list: ValRef, n: usize) -> Option<ValRef> {
+        let mut idx = 0;
+        while !list.is_nil() {
+            match self.arena.get(list) {
+                Value::Cons(car, cdr) => {
+                    if idx == n {
+                        return Some(car);
+                    }
+                    idx += 1;
+                    list = cdr;
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    // Reverse a list
+    pub fn reverse_list(&self, mut list: ValRef) -> Result<ValRef, ArenaError> {
+        let mut result = ValRef::nil();
+        while !list.is_nil() {
+            match self.arena.get(list) {
+                Value::Cons(car, cdr) => {
+                    result = self.cons(car, result)?;
+                    list = cdr;
+                }
+                _ => break,
+            }
+        }
+        Ok(result)
+    }
+
+    // Create environment with builtins
+    pub fn create_global_env(&self) -> Result<EnvRef, ()> {
+        let env = self.envs.alloc(ValRef::nil(), None)?;
+
+        self.env_set(env, "nil", ValRef::nil())?;
+        self.env_set(
+            env,
+            "+",
+            self.arena.alloc(Value::Builtin(0)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "-",
+            self.arena.alloc(Value::Builtin(1)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "*",
+            self.arena.alloc(Value::Builtin(2)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "/",
+            self.arena.alloc(Value::Builtin(3)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "=",
+            self.arena.alloc(Value::Builtin(4)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "<",
+            self.arena.alloc(Value::Builtin(5)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            ">",
+            self.arena.alloc(Value::Builtin(6)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "list",
+            self.arena.alloc(Value::Builtin(7)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "car",
+            self.arena.alloc(Value::Builtin(8)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "cdr",
+            self.arena.alloc(Value::Builtin(9)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "cons",
+            self.arena.alloc(Value::Builtin(10)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "null?",
+            self.arena.alloc(Value::Builtin(11)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "cons?",
+            self.arena.alloc(Value::Builtin(12)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "length",
+            self.arena.alloc(Value::Builtin(13)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "append",
+            self.arena.alloc(Value::Builtin(14)).map_err(|_| ())?,
+        )?;
+        self.env_set(
+            env,
+            "reverse",
+            self.arena.alloc(Value::Builtin(15)).map_err(|_| ())?,
+        )?;
+
+        Ok(env)
+    }
+
+    pub fn env_set(&self, env: EnvRef, name: &str, value: ValRef) -> Result<(), ()> {
+        let name_str = self.strings.intern(name)?;
+        let binding = self
+            .cons(
+                self.arena.alloc(Value::Symbol(name_str)).map_err(|_| ())?,
+                value,
+            )
+            .map_err(|_| ())?;
+
+        let bindings = self.envs.get_bindings(env);
+        let new_bindings = self.cons(binding, bindings).map_err(|_| ())?;
+        self.envs.set_bindings(env, new_bindings);
+        Ok(())
+    }
+
+    pub fn env_get(&self, env: EnvRef, name: StrRef) -> Option<ValRef> {
+        let mut bindings = self.envs.get_bindings(env);
+
+        while !bindings.is_nil() {
+            match self.arena.get(bindings) {
                 Value::Cons(binding, rest) => {
-                    if let Value::Cons(key, value) = binding.as_ref() {
-                        if let Value::Symbol(s) = key.as_ref() {
-                            if s == name {
-                                return Some(value.clone());
+                    if let Value::Cons(key, value) = self.arena.get(binding) {
+                        if let Value::Symbol(s) = self.arena.get(key) {
+                            if self.strings.eq(s, name) {
+                                return Some(value);
                             }
                         }
                     }
-                    current = rest.as_ref();
+                    bindings = rest;
                 }
-                Value::Nil => break,
                 _ => break,
             }
         }
 
-        if let Some(parent) = &self.parent {
-            parent.borrow().get(name)
+        if let Some(parent) = self.envs.get_parent(env) {
+            self.env_get(parent, name)
         } else {
             None
         }
-    }
-
-    fn register_builtins(&mut self) {
-        self.set("nil".to_string(), ValRef::nil());
-        self.set("+".to_string(), ValRef::builtin(builtin_add));
-        self.set("-".to_string(), ValRef::builtin(builtin_sub));
-        self.set("*".to_string(), ValRef::builtin(builtin_mul));
-        self.set("/".to_string(), ValRef::builtin(builtin_div));
-        self.set("=".to_string(), ValRef::builtin(builtin_eq));
-        self.set("<".to_string(), ValRef::builtin(builtin_lt));
-        self.set(">".to_string(), ValRef::builtin(builtin_gt));
-        self.set("list".to_string(), ValRef::builtin(builtin_list));
-        self.set("car".to_string(), ValRef::builtin(builtin_car));
-        self.set("cdr".to_string(), ValRef::builtin(builtin_cdr));
-        self.set("cons".to_string(), ValRef::builtin(builtin_cons_fn));
-        self.set("null?".to_string(), ValRef::builtin(builtin_null));
-        self.set("cons?".to_string(), ValRef::builtin(builtin_cons_p));
-        self.set("length".to_string(), ValRef::builtin(builtin_length));
-        self.set("append".to_string(), ValRef::builtin(builtin_append));
-        self.set("reverse".to_string(), ValRef::builtin(builtin_reverse));
     }
 }
 
 // ============================================================================
 // Tokenizer
 // ============================================================================
-
-#[derive(Debug, Clone, PartialEq)]
-enum Token {
-    LParen,
-    RParen,
-    Symbol(String),
-    Number(i64),
-    Bool(bool),
-    Quote,
-}
 
 fn parse_i64(s: &str) -> Result<i64, ()> {
     let bytes = s.as_bytes();
@@ -398,20 +482,14 @@ fn parse_i64(s: &str) -> Result<i64, ()> {
     }
 
     let (negative, start) = if bytes[0] == b'-' {
-        if bytes.len() == 1 {
-            return Err(());
-        }
         (true, 1)
     } else if bytes[0] == b'+' {
-        if bytes.len() == 1 {
-            return Err(());
-        }
         (false, 1)
     } else {
         (false, 0)
     };
 
-    if bytes[start..].is_empty() {
+    if start >= bytes.len() {
         return Err(());
     }
 
@@ -434,373 +512,641 @@ fn parse_i64(s: &str) -> Result<i64, ()> {
     }
 }
 
-// Build a cons list from tokens
-fn tokens_to_list(tokens: &[Token]) -> ValRef {
-    let mut result = ValRef::nil();
-    let mut i = tokens.len();
-    while i > 0 {
-        i -= 1;
-        let token_val = match &tokens[i] {
-            Token::LParen => ValRef::symbol("("),
-            Token::RParen => ValRef::symbol(")"),
-            Token::Symbol(s) => ValRef::symbol(s),
-            Token::Number(n) => ValRef::number(*n),
-            Token::Bool(b) => ValRef::bool_val(*b),
-            Token::Quote => ValRef::symbol("'"),
-        };
-        result = ValRef::cons(token_val, result);
-    }
-    result
-}
+impl<const N: usize> Interpreter<N> {
+    pub fn tokenize(&self, input: &str) -> Result<ValRef, StrRef> {
+        let mut result = ValRef::nil();
+        let mut chars = input.chars().peekable();
 
-fn tokenize(input: &str) -> Result<ValRef, String> {
-    let mut result = ValRef::nil();
-    let mut chars = input.chars().peekable();
-
-    while let Some(&ch) = chars.peek() {
-        match ch {
-            ' ' | '\t' | '\n' | '\r' => {
-                chars.next();
-            }
-            '(' => {
-                result = ValRef::cons(ValRef::symbol("("), result);
-                chars.next();
-            }
-            ')' => {
-                result = ValRef::cons(ValRef::symbol(")"), result);
-                chars.next();
-            }
-            '\'' => {
-                result = ValRef::cons(ValRef::symbol("'"), result);
-                chars.next();
-            }
-            ';' => {
-                while let Some(&c) = chars.peek() {
-                    chars.next();
-                    if c == '\n' {
-                        break;
-                    }
-                }
-            }
-            '#' => {
-                chars.next();
-                match chars.peek() {
-                    Some(&'t') => {
-                        result = ValRef::cons(ValRef::bool_val(true), result);
-                        chars.next();
-                    }
-                    Some(&'f') => {
-                        result = ValRef::cons(ValRef::bool_val(false), result);
-                        chars.next();
-                    }
-                    _ => return Err("Invalid boolean literal".to_string()),
-                }
-            }
-            _ => {
-                let mut atom = String::new();
-                while let Some(&c) = chars.peek() {
-                    if c.is_whitespace() || c == '(' || c == ')' || c == '\'' {
-                        break;
-                    }
-                    atom.push(c);
+        while let Some(&ch) = chars.peek() {
+            match ch {
+                ' ' | '\t' | '\n' | '\r' => {
                     chars.next();
                 }
-
-                if atom.is_empty() {
-                    continue;
+                '(' => {
+                    let s = self.strings.intern("(").map_err(|_| StrRef(0))?;
+                    result = self
+                        .cons(
+                            self.arena.alloc(Value::Symbol(s)).map_err(|_| StrRef(0))?,
+                            result,
+                        )
+                        .map_err(|_| StrRef(0))?;
+                    chars.next();
                 }
+                ')' => {
+                    let s = self.strings.intern(")").map_err(|_| StrRef(0))?;
+                    result = self
+                        .cons(
+                            self.arena.alloc(Value::Symbol(s)).map_err(|_| StrRef(0))?,
+                            result,
+                        )
+                        .map_err(|_| StrRef(0))?;
+                    chars.next();
+                }
+                '\'' => {
+                    let s = self.strings.intern("'").map_err(|_| StrRef(0))?;
+                    result = self
+                        .cons(
+                            self.arena.alloc(Value::Symbol(s)).map_err(|_| StrRef(0))?,
+                            result,
+                        )
+                        .map_err(|_| StrRef(0))?;
+                    chars.next();
+                }
+                ';' => {
+                    while let Some(&c) = chars.peek() {
+                        chars.next();
+                        if c == '\n' {
+                            break;
+                        }
+                    }
+                }
+                '#' => {
+                    chars.next();
+                    match chars.peek() {
+                        Some(&'t') => {
+                            result = self
+                                .cons(
+                                    self.arena.alloc(Value::Bool(true)).map_err(|_| StrRef(0))?,
+                                    result,
+                                )
+                                .map_err(|_| StrRef(0))?;
+                            chars.next();
+                        }
+                        Some(&'f') => {
+                            result = self
+                                .cons(
+                                    self.arena
+                                        .alloc(Value::Bool(false))
+                                        .map_err(|_| StrRef(0))?,
+                                    result,
+                                )
+                                .map_err(|_| StrRef(0))?;
+                            chars.next();
+                        }
+                        _ => {
+                            return Err(self
+                                .strings
+                                .intern("Invalid boolean")
+                                .unwrap_or(StrRef(0)));
+                        }
+                    }
+                }
+                _ => {
+                    let mut atom = [0u8; 128];
+                    let mut idx = 0;
 
-                if let Ok(num) = parse_i64(&atom) {
-                    result = ValRef::cons(ValRef::number(num), result);
-                } else {
-                    result = ValRef::cons(ValRef::symbol(&atom), result);
+                    while let Some(&c) = chars.peek() {
+                        if c.is_whitespace() || c == '(' || c == ')' || c == '\'' {
+                            break;
+                        }
+                        let mut buf = [0u8; 4];
+                        let s = c.encode_utf8(&mut buf);
+                        for &b in s.as_bytes() {
+                            if idx >= atom.len() {
+                                return Err(self
+                                    .strings
+                                    .intern("Atom too long")
+                                    .unwrap_or(StrRef(0)));
+                            }
+                            atom[idx] = b;
+                            idx += 1;
+                        }
+                        chars.next();
+                    }
+
+                    if idx == 0 {
+                        continue;
+                    }
+
+                    let atom_str = core::str::from_utf8(&atom[..idx]).map_err(|_| StrRef(0))?;
+
+                    if let Ok(num) = parse_i64(atom_str) {
+                        result = self
+                            .cons(
+                                self.arena
+                                    .alloc(Value::Number(num))
+                                    .map_err(|_| StrRef(0))?,
+                                result,
+                            )
+                            .map_err(|_| StrRef(0))?;
+                    } else {
+                        let s = self.strings.intern(atom_str).map_err(|_| StrRef(0))?;
+                        result = self
+                            .cons(
+                                self.arena.alloc(Value::Symbol(s)).map_err(|_| StrRef(0))?,
+                                result,
+                            )
+                            .map_err(|_| StrRef(0))?;
+                    }
                 }
             }
         }
+
+        self.reverse_list(result).map_err(|_| StrRef(0))
     }
-
-    // Reverse the list to get correct order
-    Ok(reverse_list(result))
-}
-
-// Helper to reverse a cons list
-fn reverse_list(list: ValRef) -> ValRef {
-    let mut result = ValRef::nil();
-    let mut current = list.as_ref();
-
-    loop {
-        match current {
-            Value::Cons(car, cdr) => {
-                result = ValRef::cons(car.clone(), result);
-                current = cdr.as_ref();
-            }
-            Value::Nil => break,
-            _ => break,
-        }
-    }
-
-    result
 }
 
 // ============================================================================
 // Parser
 // ============================================================================
 
-fn parse_tokens(tokens: ValRef) -> Result<(ValRef, ValRef), String> {
-    match tokens.as_ref() {
-        Value::Nil => Err("Unexpected end of input".to_string()),
-        Value::Cons(first, rest) => match first.as_ref() {
-            Value::Number(_) | Value::Bool(_) => Ok((first.clone(), rest.clone())),
-            Value::Symbol(s) if s == "'" => {
-                if let Value::Cons(next_expr, remaining) = rest.as_ref() {
-                    let (val, consumed) =
-                        parse_tokens(ValRef::cons(next_expr.clone(), remaining.clone()))?;
-                    let quoted =
-                        ValRef::cons(ValRef::symbol("quote"), ValRef::cons(val, ValRef::nil()));
-                    Ok((quoted, consumed))
-                } else {
-                    Err("Quote requires an expression".to_string())
-                }
-            }
-            Value::Symbol(s) if s == "(" => {
-                let mut items = ValRef::nil();
-                let mut pos = rest.clone();
+impl<const N: usize> Interpreter<N> {
+    pub fn parse_tokens(&self, tokens: ValRef) -> Result<(ValRef, ValRef), StrRef> {
+        if tokens.is_nil() {
+            return Err(self.strings.intern("Unexpected end").unwrap_or(StrRef(0)));
+        }
 
-                loop {
-                    match pos.as_ref() {
-                        Value::Nil => return Err("Unmatched '('".to_string()),
-                        Value::Cons(token, rest_tokens) => {
-                            if let Value::Symbol(s) = token.as_ref() {
-                                if s == ")" {
-                                    return Ok((reverse_list(items), rest_tokens.clone()));
-                                }
+        match self.arena.get(tokens) {
+            Value::Cons(first, rest) => match self.arena.get(first) {
+                Value::Number(_) | Value::Bool(_) => Ok((first, rest)),
+                Value::Symbol(s) => {
+                    let mut buf = [0u8; 32];
+                    let s_str = self.strings.get(s, &mut buf).map_err(|_| StrRef(0))?;
+
+                    if s_str == "'" {
+                        match self.arena.get(rest) {
+                            Value::Cons(next_expr, remaining) => {
+                                let next_tokens =
+                                    self.cons(next_expr, remaining).map_err(|_| StrRef(0))?;
+                                let (val, consumed) = self.parse_tokens(next_tokens)?;
+                                let quote_sym =
+                                    self.strings.intern("quote").map_err(|_| StrRef(0))?;
+                                let quoted = self
+                                    .cons(
+                                        self.arena
+                                            .alloc(Value::Symbol(quote_sym))
+                                            .map_err(|_| StrRef(0))?,
+                                        self.cons(val, ValRef::nil()).map_err(|_| StrRef(0))?,
+                                    )
+                                    .map_err(|_| StrRef(0))?;
+                                Ok((quoted, consumed))
                             }
-                            let (val, consumed) = parse_tokens(pos)?;
-                            items = ValRef::cons(val, items);
-                            pos = consumed;
+                            _ => Err(self.strings.intern("Quote needs expr").unwrap_or(StrRef(0))),
                         }
-                        _ => return Err("Invalid token stream".to_string()),
-                    }
-                }
-            }
-            Value::Symbol(s) if s == ")" => Err("Unexpected ')'".to_string()),
-            Value::Symbol(_) => Ok((first.clone(), rest.clone())),
-            _ => Err("Unexpected token type".to_string()),
-        },
-        _ => Err("Invalid token stream".to_string()),
-    }
-}
+                    } else if s_str == "(" {
+                        let mut items = ValRef::nil();
+                        let mut pos = rest;
 
-pub fn parse(input: &str) -> Result<ValRef, String> {
-    let tokens = tokenize(input)?;
-    if tokens.is_nil() {
-        return Err("Empty input".to_string());
-    }
-    let (val, remaining) = parse_tokens(tokens)?;
-    if !remaining.is_nil() {
-        return Err("Unexpected tokens after expression".to_string());
-    }
-    Ok(val)
-}
-
-pub fn parse_multiple(input: &str) -> Result<ValRef, String> {
-    let tokens = tokenize(input)?;
-    if tokens.is_nil() {
-        return Err("Empty input".to_string());
-    }
-
-    let mut expressions = ValRef::nil();
-    let mut pos = tokens;
-
-    loop {
-        if pos.is_nil() {
-            break;
-        }
-        let (val, consumed) = parse_tokens(pos)?;
-        expressions = ValRef::cons(val, expressions);
-        pos = consumed;
-    }
-
-    Ok(reverse_list(expressions))
-}
-
-// ============================================================================
-// Evaluator - With Proper Tail Call Optimization via Trampoline
-// ============================================================================
-
-fn eval_step(expr: ValRef, env: &EnvRef) -> Result<EvalResult, String> {
-    match expr.as_ref() {
-        Value::Number(_) | Value::Bool(_) | Value::Builtin(_) | Value::Lambda { .. } => {
-            Ok(EvalResult::Done(expr.clone()))
-        }
-        Value::Symbol(s) => {
-            if s == "nil" {
-                return Ok(EvalResult::Done(ValRef::nil()));
-            }
-            env.borrow()
-                .get(s)
-                .map(EvalResult::Done)
-                .ok_or_else(|| format!("Unbound symbol: {}", s))
-        }
-        Value::Cons(car, cdr) => {
-            if let Value::Symbol(sym) = car.as_ref() {
-                match sym.as_str() {
-                    "define" => {
-                        let len = expr.as_ref().list_len();
-                        if len != 3 {
-                            return Err("define requires 2 arguments".to_string());
-                        }
-                        let name_val = expr.as_ref().list_nth(1).ok_or("define missing name")?;
-                        let name = name_val
-                            .as_symbol()
-                            .ok_or("define requires symbol as first arg")?;
-                        let body_val = expr.as_ref().list_nth(2).ok_or("define missing body")?;
-                        let val = eval(body_val, env)?;
-                        env.borrow_mut().set(name.to_string(), val.clone());
-                        return Ok(EvalResult::Done(val));
-                    }
-                    "lambda" => {
-                        let len = expr.as_ref().list_len();
-                        if len != 3 {
-                            return Err("lambda requires 2 arguments (params body)".to_string());
-                        }
-
-                        let params_list =
-                            expr.as_ref().list_nth(1).ok_or("lambda missing params")?;
-
-                        // Validate all params are symbols
-                        let mut current = params_list.as_ref();
                         loop {
-                            match current {
-                                Value::Cons(param, rest) => {
-                                    if param.as_symbol().is_none() {
-                                        return Err("lambda params must be symbols".to_string());
+                            if pos.is_nil() {
+                                return Err(self
+                                    .strings
+                                    .intern("Unmatched (")
+                                    .unwrap_or(StrRef(0)));
+                            }
+
+                            match self.arena.get(pos) {
+                                Value::Cons(token, rest_tokens) => {
+                                    if let Value::Symbol(tok_s) = self.arena.get(token) {
+                                        let mut tok_buf = [0u8; 32];
+                                        let tok_str = self
+                                            .strings
+                                            .get(tok_s, &mut tok_buf)
+                                            .map_err(|_| StrRef(0))?;
+                                        if tok_str == ")" {
+                                            return Ok((
+                                                self.reverse_list(items).map_err(|_| StrRef(0))?,
+                                                rest_tokens,
+                                            ));
+                                        }
                                     }
-                                    current = rest.as_ref();
+                                    let (val, consumed) = self.parse_tokens(pos)?;
+                                    items = self.cons(val, items).map_err(|_| StrRef(0))?;
+                                    pos = consumed;
                                 }
-                                Value::Nil => break,
-                                _ => return Err("lambda params must be a list".to_string()),
+                                _ => return Err(StrRef(0)),
                             }
                         }
-
-                        let body = expr.as_ref().list_nth(2).ok_or("lambda missing body")?;
-                        let captured_env = env.clone();
-
-                        return Ok(EvalResult::Done(ValRef::lambda(
-                            params_list,
-                            body,
-                            captured_env,
-                        )));
+                    } else if s_str == ")" {
+                        Err(self.strings.intern("Unexpected )").unwrap_or(StrRef(0)))
+                    } else {
+                        Ok((first, rest))
                     }
-                    "if" => {
-                        let len = expr.as_ref().list_len();
-                        if len != 4 {
-                            return Err("if requires 3 arguments".to_string());
-                        }
-                        let cond_expr = expr.as_ref().list_nth(1).ok_or("if missing condition")?;
-                        let cond = eval(cond_expr, env)?;
-                        let is_true = match cond.as_ref() {
-                            Value::Bool(b) => *b,
-                            Value::Nil => false,
-                            _ => true,
-                        };
-                        let branch_idx = if is_true { 2 } else { 3 };
-                        let branch = expr
-                            .as_ref()
-                            .list_nth(branch_idx)
-                            .ok_or("if missing branch")?;
-                        return Ok(EvalResult::TailCall(branch, env.clone()));
-                    }
-                    "quote" => {
-                        let len = expr.as_ref().list_len();
-                        if len != 2 {
-                            return Err("quote requires 1 argument".to_string());
-                        }
-                        let quoted = expr.as_ref().list_nth(1).ok_or("quote missing argument")?;
-                        return Ok(EvalResult::Done(quoted));
-                    }
-                    _ => {}
                 }
-            }
-
-            let func = eval(car.clone(), env)?;
-
-            // Evaluate all arguments
-            let mut args = ValRef::nil();
-            let mut current = cdr.as_ref();
-            loop {
-                match current {
-                    Value::Cons(arg_car, arg_cdr) => {
-                        let evaled = eval(arg_car.clone(), env)?;
-                        args = ValRef::cons(evaled, args);
-                        current = arg_cdr.as_ref();
-                    }
-                    Value::Nil => break,
-                    _ => return Err("Malformed argument list".to_string()),
-                }
-            }
-            args = reverse_list(args);
-
-            match func.as_ref() {
-                Value::Builtin(f) => Ok(EvalResult::Done(f(&args)?)),
-                Value::Lambda {
-                    params,
-                    body,
-                    env: lambda_env,
-                } => {
-                    // Count parameters and arguments
-                    let param_count = params.as_ref().list_len();
-                    let arg_count = args.as_ref().list_len();
-
-                    if arg_count != param_count {
-                        return Err(format!(
-                            "Lambda expects {} arguments, got {}",
-                            param_count, arg_count
-                        ));
-                    }
-
-                    let call_env = EnvRef::with_parent(lambda_env.clone());
-
-                    // Bind parameters to arguments
-                    let mut param_cur = params.as_ref();
-                    let mut arg_cur = args.as_ref();
-
-                    loop {
-                        match (param_cur, arg_cur) {
-                            (Value::Cons(p_car, p_cdr), Value::Cons(a_car, a_cdr)) => {
-                                if let Value::Symbol(param_name) = p_car.as_ref() {
-                                    call_env.borrow_mut().set(param_name.clone(), a_car.clone());
-                                }
-                                param_cur = p_cdr.as_ref();
-                                arg_cur = a_cdr.as_ref();
-                            }
-                            (Value::Nil, Value::Nil) => break,
-                            _ => {
-                                return Err("Parameter/argument mismatch".to_string());
-                            }
-                        }
-                    }
-
-                    Ok(EvalResult::TailCall(body.clone(), call_env))
-                }
-                _ => Err(format!("Cannot call non-function: {}", func.to_string())),
-            }
+                _ => Err(StrRef(0)),
+            },
+            _ => Err(StrRef(0)),
         }
-        Value::Nil => Ok(EvalResult::Done(ValRef::nil())),
+    }
+
+    pub fn parse(&self, input: &str) -> Result<ValRef, StrRef> {
+        let tokens = self.tokenize(input)?;
+        if tokens.is_nil() {
+            return Err(self.strings.intern("Empty input").unwrap_or(StrRef(0)));
+        }
+        let (val, remaining) = self.parse_tokens(tokens)?;
+        if !remaining.is_nil() {
+            return Err(self.strings.intern("Extra tokens").unwrap_or(StrRef(0)));
+        }
+        Ok(val)
     }
 }
 
-pub fn eval(mut expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
-    let mut current_env = env.clone();
+// ============================================================================
+// Evaluator
+// ============================================================================
 
-    loop {
-        match eval_step(expr, &current_env)? {
-            EvalResult::Done(val) => return Ok(val),
-            EvalResult::TailCall(new_expr, new_env) => {
-                expr = new_expr;
-                current_env = new_env;
+pub enum EvalResult {
+    Done(ValRef),
+    TailCall(ValRef, EnvRef),
+}
+
+impl<const N: usize> Interpreter<N> {
+    pub fn eval(&self, mut expr: ValRef, mut env: EnvRef) -> Result<ValRef, StrRef> {
+        loop {
+            match self.eval_step(expr, env)? {
+                EvalResult::Done(val) => return Ok(val),
+                EvalResult::TailCall(new_expr, new_env) => {
+                    expr = new_expr;
+                    env = new_env;
+                }
             }
         }
+    }
+
+    fn eval_step(&self, expr: ValRef, env: EnvRef) -> Result<EvalResult, StrRef> {
+        if expr.is_nil() {
+            return Ok(EvalResult::Done(ValRef::nil()));
+        }
+
+        match self.arena.get(expr) {
+            Value::Number(_)
+            | Value::Bool(_)
+            | Value::Char(_)
+            | Value::Builtin(_)
+            | Value::Lambda { .. } => Ok(EvalResult::Done(expr)),
+            Value::Symbol(s) => {
+                let mut buf = [0u8; 32];
+                let s_str = self.strings.get(s, &mut buf).map_err(|_| StrRef(0))?;
+                if s_str == "nil" {
+                    return Ok(EvalResult::Done(ValRef::nil()));
+                }
+                self.env_get(env, s)
+                    .map(EvalResult::Done)
+                    .ok_or_else(|| self.strings.intern("Unbound symbol").unwrap_or(StrRef(0)))
+            }
+            Value::Cons(car, _cdr) => {
+                if let Value::Symbol(sym) = self.arena.get(car) {
+                    let mut buf = [0u8; 32];
+                    let sym_str = self.strings.get(sym, &mut buf).map_err(|_| StrRef(0))?;
+
+                    match sym_str {
+                        "define" => {
+                            let len = self.list_len(expr);
+                            if len != 3 {
+                                return Err(self
+                                    .strings
+                                    .intern("define needs 2 args")
+                                    .unwrap_or(StrRef(0)));
+                            }
+                            let name_val = self.list_nth(expr, 1).ok_or(StrRef(0))?;
+                            let name = match self.arena.get(name_val) {
+                                Value::Symbol(s) => s,
+                                _ => {
+                                    return Err(self
+                                        .strings
+                                        .intern("define needs symbol")
+                                        .unwrap_or(StrRef(0)));
+                                }
+                            };
+                            let body_val = self.list_nth(expr, 2).ok_or(StrRef(0))?;
+                            let val = self.eval(body_val, env)?;
+
+                            let mut buf = [0u8; 32];
+                            let name_str =
+                                self.strings.get(name, &mut buf).map_err(|_| StrRef(0))?;
+                            self.env_set(env, name_str, val).map_err(|_| StrRef(0))?;
+                            return Ok(EvalResult::Done(val));
+                        }
+                        "lambda" => {
+                            let len = self.list_len(expr);
+                            if len != 3 {
+                                return Err(self
+                                    .strings
+                                    .intern("lambda needs 2 args")
+                                    .unwrap_or(StrRef(0)));
+                            }
+                            let params = self.list_nth(expr, 1).ok_or(StrRef(0))?;
+                            let body = self.list_nth(expr, 2).ok_or(StrRef(0))?;
+
+                            let lambda = self
+                                .arena
+                                .alloc(Value::Lambda { params, body, env })
+                                .map_err(|_| StrRef(0))?;
+                            return Ok(EvalResult::Done(lambda));
+                        }
+                        "if" => {
+                            let len = self.list_len(expr);
+                            if len != 4 {
+                                return Err(self
+                                    .strings
+                                    .intern("if needs 3 args")
+                                    .unwrap_or(StrRef(0)));
+                            }
+                            let cond_expr = self.list_nth(expr, 1).ok_or(StrRef(0))?;
+                            let cond = self.eval(cond_expr, env)?;
+                            let is_true = match self.arena.get(cond) {
+                                Value::Bool(b) => b,
+                                Value::Nil => false,
+                                _ => true,
+                            };
+                            let branch_idx = if is_true { 2 } else { 3 };
+                            let branch = self.list_nth(expr, branch_idx).ok_or(StrRef(0))?;
+                            return Ok(EvalResult::TailCall(branch, env));
+                        }
+                        "quote" => {
+                            let len = self.list_len(expr);
+                            if len != 2 {
+                                return Err(self
+                                    .strings
+                                    .intern("quote needs 1 arg")
+                                    .unwrap_or(StrRef(0)));
+                            }
+                            let quoted = self.list_nth(expr, 1).ok_or(StrRef(0))?;
+                            return Ok(EvalResult::Done(quoted));
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Function application
+                let func = self.eval(car, env)?;
+
+                // Evaluate arguments
+                let mut args = ValRef::nil();
+                let mut current = match self.arena.get(expr) {
+                    Value::Cons(_, cdr) => cdr,
+                    _ => return Err(StrRef(0)),
+                };
+
+                while !current.is_nil() {
+                    match self.arena.get(current) {
+                        Value::Cons(arg_car, arg_cdr) => {
+                            let evaled = self.eval(arg_car, env)?;
+                            args = self.cons(evaled, args).map_err(|_| StrRef(0))?;
+                            current = arg_cdr;
+                        }
+                        _ => break,
+                    }
+                }
+                args = self.reverse_list(args).map_err(|_| StrRef(0))?;
+
+                match self.arena.get(func) {
+                    Value::Builtin(id) => Ok(EvalResult::Done(self.call_builtin(id, args)?)),
+                    Value::Lambda {
+                        params,
+                        body,
+                        env: lambda_env,
+                    } => {
+                        let param_count = self.list_len(params);
+                        let arg_count = self.list_len(args);
+
+                        if arg_count != param_count {
+                            return Err(self
+                                .strings
+                                .intern("Arg count mismatch")
+                                .unwrap_or(StrRef(0)));
+                        }
+
+                        let call_env = self
+                            .envs
+                            .alloc(ValRef::nil(), Some(lambda_env))
+                            .map_err(|_| StrRef(0))?;
+
+                        let mut param_cur = params;
+                        let mut arg_cur = args;
+
+                        while !param_cur.is_nil() {
+                            match (self.arena.get(param_cur), self.arena.get(arg_cur)) {
+                                (Value::Cons(p_car, p_cdr), Value::Cons(a_car, a_cdr)) => {
+                                    if let Value::Symbol(param_name) = self.arena.get(p_car) {
+                                        let mut buf = [0u8; 32];
+                                        let name_str = self
+                                            .strings
+                                            .get(param_name, &mut buf)
+                                            .map_err(|_| StrRef(0))?;
+                                        self.env_set(call_env, name_str, a_car)
+                                            .map_err(|_| StrRef(0))?;
+                                    }
+                                    param_cur = p_cdr;
+                                    arg_cur = a_cdr;
+                                }
+                                _ => break,
+                            }
+                        }
+
+                        Ok(EvalResult::TailCall(body, call_env))
+                    }
+                    _ => Err(self.strings.intern("Not callable").unwrap_or(StrRef(0))),
+                }
+            }
+            Value::Nil => Ok(EvalResult::Done(ValRef::nil())),
+        }
+    }
+
+    pub fn eval_str(&self, input: &str, env: EnvRef) -> Result<[u8; 4096], StrRef> {
+        let expr = self.parse(input)?;
+        let result = self.eval(expr, env)?;
+        self.value_to_string(result)
+    }
+
+    fn call_builtin(&self, id: BuiltinId, args: ValRef) -> Result<ValRef, StrRef> {
+        match id {
+            0 => builtin_add(self, args),
+            1 => builtin_sub(self, args),
+            2 => builtin_mul(self, args),
+            3 => builtin_div(self, args),
+            4 => builtin_eq(self, args),
+            5 => builtin_lt(self, args),
+            6 => builtin_gt(self, args),
+            7 => builtin_list(self, args),
+            8 => builtin_car(self, args),
+            9 => builtin_cdr(self, args),
+            10 => builtin_cons_fn(self, args),
+            11 => builtin_null(self, args),
+            12 => builtin_cons_p(self, args),
+            13 => builtin_length(self, args),
+            14 => builtin_append(self, args),
+            15 => builtin_reverse(self, args),
+            _ => Err(self.strings.intern("Unknown builtin").unwrap_or(StrRef(0))),
+        }
+    }
+
+    fn value_to_string(&self, val: ValRef) -> Result<[u8; 4096], StrRef> {
+        let mut buf = [0u8; 4096];
+        let len = self
+            .value_to_str_buf(val, &mut buf)
+            .map_err(|_| StrRef(0))?;
+        buf[len] = 0; // null terminator
+        Ok(buf)
+    }
+
+    fn value_to_str_buf(&self, val: ValRef, buf: &mut [u8]) -> Result<usize, ()> {
+        if val.is_nil() {
+            let s = b"nil";
+            if s.len() > buf.len() {
+                return Err(());
+            }
+            buf[..s.len()].copy_from_slice(s);
+            return Ok(s.len());
+        }
+
+        match self.arena.get(val) {
+            Value::Number(n) => {
+                let mut temp = [0u8; 32];
+                let mut idx = 0;
+                let mut num = n;
+                let negative = num < 0;
+
+                if negative {
+                    num = -num;
+                }
+
+                if num == 0 {
+                    temp[idx] = b'0';
+                    idx += 1;
+                } else {
+                    let mut divisor = 1i64;
+                    let mut temp_num = num;
+                    while temp_num >= 10 {
+                        divisor *= 10;
+                        temp_num /= 10;
+                    }
+
+                    while divisor > 0 {
+                        let digit = (num / divisor) as u8;
+                        temp[idx] = b'0' + digit;
+                        idx += 1;
+                        num %= divisor;
+                        divisor /= 10;
+                    }
+                }
+
+                if negative {
+                    if idx + 1 > buf.len() {
+                        return Err(());
+                    }
+                    buf[0] = b'-';
+                    buf[1..=idx].copy_from_slice(&temp[..idx]);
+                    Ok(idx + 1)
+                } else {
+                    if idx > buf.len() {
+                        return Err(());
+                    }
+                    buf[..idx].copy_from_slice(&temp[..idx]);
+                    Ok(idx)
+                }
+            }
+            Value::Symbol(s) => {
+                let mut temp = [0u8; MAX_STRING_LEN];
+                let s_str = self.strings.get(s, &mut temp)?;
+                let bytes = s_str.as_bytes();
+                if bytes.len() > buf.len() {
+                    return Err(());
+                }
+                buf[..bytes.len()].copy_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            Value::Bool(b) => {
+                let s = if b { b"#t" } else { b"#f" };
+                if s.len() > buf.len() {
+                    return Err(());
+                }
+                buf[..s.len()].copy_from_slice(s);
+                Ok(s.len())
+            }
+            Value::Char(c) => {
+                let mut char_buf = [0u8; 4];
+                let s = c.encode_utf8(&mut char_buf);
+                let bytes = s.as_bytes();
+                if bytes.len() > buf.len() {
+                    return Err(());
+                }
+                buf[..bytes.len()].copy_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            Value::Cons(_, _) => self.list_to_str_buf(val, buf),
+            Value::Builtin(_) => {
+                let s = b"<builtin>";
+                if s.len() > buf.len() {
+                    return Err(());
+                }
+                buf[..s.len()].copy_from_slice(s);
+                Ok(s.len())
+            }
+            Value::Lambda { .. } => {
+                let s = b"<lambda>";
+                if s.len() > buf.len() {
+                    return Err(());
+                }
+                buf[..s.len()].copy_from_slice(s);
+                Ok(s.len())
+            }
+            Value::Nil => {
+                let s = b"nil";
+                if s.len() > buf.len() {
+                    return Err(());
+                }
+                buf[..s.len()].copy_from_slice(s);
+                Ok(s.len())
+            }
+        }
+    }
+
+    fn list_to_str_buf(&self, mut list: ValRef, buf: &mut [u8]) -> Result<usize, ()> {
+        let mut idx = 0;
+        if idx >= buf.len() {
+            return Err(());
+        }
+        buf[idx] = b'(';
+        idx += 1;
+
+        let mut first = true;
+
+        while !list.is_nil() {
+            match self.arena.get(list) {
+                Value::Cons(car, cdr) => {
+                    if !first {
+                        if idx >= buf.len() {
+                            return Err(());
+                        }
+                        buf[idx] = b' ';
+                        idx += 1;
+                    }
+                    first = false;
+
+                    let item_len = self.value_to_str_buf(car, &mut buf[idx..])?;
+                    idx += item_len;
+
+                    list = cdr;
+                }
+                _ => {
+                    if !first {
+                        if idx + 3 > buf.len() {
+                            return Err(());
+                        }
+                        buf[idx] = b' ';
+                        idx += 1;
+                        buf[idx] = b'.';
+                        idx += 1;
+                        buf[idx] = b' ';
+                        idx += 1;
+                    }
+
+                    let item_len = self.value_to_str_buf(list, &mut buf[idx..])?;
+                    idx += item_len;
+                    break;
+                }
+            }
+        }
+
+        if idx >= buf.len() {
+            return Err(());
+        }
+        buf[idx] = b')';
+        idx += 1;
+
+        Ok(idx)
     }
 }
 
@@ -808,278 +1154,375 @@ pub fn eval(mut expr: ValRef, env: &EnvRef) -> Result<ValRef, String> {
 // Built-in Functions
 // ============================================================================
 
-fn builtin_add(args: &ValRef) -> Result<ValRef, String> {
+fn builtin_add<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
     let mut result: i64 = 0;
-    let mut current = args.as_ref();
+    let mut current = args;
 
-    loop {
-        match current {
+    while !current.is_nil() {
+        match interp.arena.get(current) {
             Value::Cons(car, cdr) => {
-                let num = car.as_number().ok_or("+ requires numbers")?;
-                result = result.checked_add(num).ok_or("Integer overflow")?;
-                current = cdr.as_ref();
+                match interp.arena.get(car) {
+                    Value::Number(n) => {
+                        result = result.checked_add(n).ok_or(StrRef(0))?;
+                    }
+                    _ => {
+                        return Err(interp
+                            .strings
+                            .intern("+ needs numbers")
+                            .unwrap_or(StrRef(0)));
+                    }
+                }
+                current = cdr;
             }
-            Value::Nil => break,
-            _ => return Err("Invalid argument list".to_string()),
+            _ => break,
         }
     }
 
-    Ok(ValRef::number(result))
+    interp
+        .arena
+        .alloc(Value::Number(result))
+        .map_err(|_| StrRef(0))
 }
 
-fn builtin_sub(args: &ValRef) -> Result<ValRef, String> {
-    let len = args.as_ref().list_len();
+fn builtin_sub<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
+    let len = interp.list_len(args);
     if len == 0 {
-        return Err("- requires at least 1 argument".to_string());
+        return Err(interp
+            .strings
+            .intern("- needs 1+ args")
+            .unwrap_or(StrRef(0)));
     }
 
-    let first = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or("- missing first argument")?;
-    let first_num = first.as_number().ok_or("- requires numbers")?;
+    let first = interp.list_nth(args, 0).ok_or(StrRef(0))?;
+    let first_num = match interp.arena.get(first) {
+        Value::Number(n) => n,
+        _ => {
+            return Err(interp
+                .strings
+                .intern("- needs numbers")
+                .unwrap_or(StrRef(0)));
+        }
+    };
 
     if len == 1 {
-        return Ok(ValRef::number(
-            first_num.checked_neg().ok_or("Integer overflow")?,
-        ));
+        return interp
+            .arena
+            .alloc(Value::Number(-first_num))
+            .map_err(|_| StrRef(0));
     }
 
     let mut result = first_num;
-    let mut current = args.as_ref();
-    if let Value::Cons(_, rest) = current {
-        current = rest.as_ref();
-    }
+    let mut current = match interp.arena.get(args) {
+        Value::Cons(_, cdr) => cdr,
+        _ => return Err(StrRef(0)),
+    };
 
-    loop {
-        match current {
+    while !current.is_nil() {
+        match interp.arena.get(current) {
             Value::Cons(car, cdr) => {
-                let num = car.as_number().ok_or("- requires numbers")?;
-                result = result.checked_sub(num).ok_or("Integer overflow")?;
-                current = cdr.as_ref();
-            }
-            Value::Nil => break,
-            _ => return Err("Invalid argument list".to_string()),
-        }
-    }
-
-    Ok(ValRef::number(result))
-}
-
-fn builtin_mul(args: &ValRef) -> Result<ValRef, String> {
-    let mut result: i64 = 1;
-    let mut current = args.as_ref();
-
-    loop {
-        match current {
-            Value::Cons(car, cdr) => {
-                let num = car.as_number().ok_or("* requires numbers")?;
-                result = result.checked_mul(num).ok_or("Integer overflow")?;
-                current = cdr.as_ref();
-            }
-            Value::Nil => break,
-            _ => return Err("Invalid argument list".to_string()),
-        }
-    }
-
-    Ok(ValRef::number(result))
-}
-
-fn builtin_div(args: &ValRef) -> Result<ValRef, String> {
-    let len = args.as_ref().list_len();
-    if len < 2 {
-        return Err("/ requires at least 2 arguments".to_string());
-    }
-
-    let first = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or("/ missing first argument")?;
-    let mut result = first.as_number().ok_or("/ requires numbers")?;
-
-    let mut current = args.as_ref();
-    if let Value::Cons(_, rest) = current {
-        current = rest.as_ref();
-    }
-
-    loop {
-        match current {
-            Value::Cons(car, cdr) => {
-                let num = car.as_number().ok_or("/ requires numbers")?;
-                if num == 0 {
-                    return Err("Division by zero".to_string());
+                match interp.arena.get(car) {
+                    Value::Number(n) => {
+                        result = result.checked_sub(n).ok_or(StrRef(0))?;
+                    }
+                    _ => {
+                        return Err(interp
+                            .strings
+                            .intern("- needs numbers")
+                            .unwrap_or(StrRef(0)));
+                    }
                 }
-                result = result.checked_div(num).ok_or("Integer overflow")?;
-                current = cdr.as_ref();
+                current = cdr;
             }
-            Value::Nil => break,
-            _ => return Err("Invalid argument list".to_string()),
+            _ => break,
         }
     }
 
-    Ok(ValRef::number(result))
+    interp
+        .arena
+        .alloc(Value::Number(result))
+        .map_err(|_| StrRef(0))
 }
 
-fn builtin_eq(args: &ValRef) -> Result<ValRef, String> {
-    if args.as_ref().list_len() != 2 {
-        return Err("= requires 2 arguments".to_string());
+fn builtin_mul<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
+    let mut result: i64 = 1;
+    let mut current = args;
+
+    while !current.is_nil() {
+        match interp.arena.get(current) {
+            Value::Cons(car, cdr) => {
+                match interp.arena.get(car) {
+                    Value::Number(n) => {
+                        result = result.checked_mul(n).ok_or(StrRef(0))?;
+                    }
+                    _ => {
+                        return Err(interp
+                            .strings
+                            .intern("* needs numbers")
+                            .unwrap_or(StrRef(0)));
+                    }
+                }
+                current = cdr;
+            }
+            _ => break,
+        }
     }
-    let a = args.as_ref().list_nth(0).ok_or("= missing arg 1")?;
-    let b = args.as_ref().list_nth(1).ok_or("= missing arg 2")?;
-    let a_num = a.as_number().ok_or("= requires numbers")?;
-    let b_num = b.as_number().ok_or("= requires numbers")?;
-    Ok(ValRef::bool_val(a_num == b_num))
+
+    interp
+        .arena
+        .alloc(Value::Number(result))
+        .map_err(|_| StrRef(0))
 }
 
-fn builtin_lt(args: &ValRef) -> Result<ValRef, String> {
-    if args.as_ref().list_len() != 2 {
-        return Err("< requires 2 arguments".to_string());
+fn builtin_div<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
+    let len = interp.list_len(args);
+    if len < 2 {
+        return Err(interp
+            .strings
+            .intern("/ needs 2+ args")
+            .unwrap_or(StrRef(0)));
     }
-    let a = args.as_ref().list_nth(0).ok_or("< missing arg 1")?;
-    let b = args.as_ref().list_nth(1).ok_or("< missing arg 2")?;
-    let a_num = a.as_number().ok_or("< requires numbers")?;
-    let b_num = b.as_number().ok_or("< requires numbers")?;
-    Ok(ValRef::bool_val(a_num < b_num))
-}
 
-fn builtin_gt(args: &ValRef) -> Result<ValRef, String> {
-    if args.as_ref().list_len() != 2 {
-        return Err("> requires 2 arguments".to_string());
-    }
-    let a = args.as_ref().list_nth(0).ok_or("> missing arg 1")?;
-    let b = args.as_ref().list_nth(1).ok_or("> missing arg 2")?;
-    let a_num = a.as_number().ok_or("> requires numbers")?;
-    let b_num = b.as_number().ok_or("> requires numbers")?;
-    Ok(ValRef::bool_val(a_num > b_num))
-}
+    let first = interp.list_nth(args, 0).ok_or(StrRef(0))?;
+    let mut result = match interp.arena.get(first) {
+        Value::Number(n) => n,
+        _ => {
+            return Err(interp
+                .strings
+                .intern("/ needs numbers")
+                .unwrap_or(StrRef(0)));
+        }
+    };
 
-fn builtin_list(args: &ValRef) -> Result<ValRef, String> {
-    Ok(args.clone())
-}
+    let mut current = match interp.arena.get(args) {
+        Value::Cons(_, cdr) => cdr,
+        _ => return Err(StrRef(0)),
+    };
 
-fn builtin_car(args: &ValRef) -> Result<ValRef, String> {
-    if args.as_ref().list_len() != 1 {
-        return Err("car requires 1 argument".to_string());
-    }
-    let list = args.as_ref().list_nth(0).ok_or("car missing argument")?;
-    let (car, _) = list.as_cons().ok_or("car requires a cons/list")?;
-    Ok(car.clone())
-}
-
-fn builtin_cdr(args: &ValRef) -> Result<ValRef, String> {
-    if args.as_ref().list_len() != 1 {
-        return Err("cdr requires 1 argument".to_string());
-    }
-    let list = args.as_ref().list_nth(0).ok_or("cdr missing argument")?;
-    let (_, cdr) = list.as_cons().ok_or("cdr requires a cons/list")?;
-    Ok(cdr.clone())
-}
-
-fn builtin_cons_fn(args: &ValRef) -> Result<ValRef, String> {
-    if args.as_ref().list_len() != 2 {
-        return Err("cons requires 2 arguments".to_string());
-    }
-    let car = args.as_ref().list_nth(0).ok_or("cons missing arg 1")?;
-    let cdr = args.as_ref().list_nth(1).ok_or("cons missing arg 2")?;
-    Ok(ValRef::cons(car, cdr))
-}
-
-fn builtin_null(args: &ValRef) -> Result<ValRef, String> {
-    if args.as_ref().list_len() != 1 {
-        return Err("null? requires 1 argument".to_string());
-    }
-    let val = args.as_ref().list_nth(0).ok_or("null? missing argument")?;
-    Ok(ValRef::bool_val(val.is_nil()))
-}
-
-fn builtin_cons_p(args: &ValRef) -> Result<ValRef, String> {
-    if args.as_ref().list_len() != 1 {
-        return Err("cons? requires 1 argument".to_string());
-    }
-    let val = args.as_ref().list_nth(0).ok_or("cons? missing argument")?;
-    Ok(ValRef::bool_val(val.as_cons().is_some()))
-}
-
-fn builtin_length(args: &ValRef) -> Result<ValRef, String> {
-    if args.as_ref().list_len() != 1 {
-        return Err("length requires 1 argument".to_string());
-    }
-    let list = args.as_ref().list_nth(0).ok_or("length missing argument")?;
-    let len = list.as_ref().list_len();
-    Ok(ValRef::number(len as i64))
-}
-
-fn builtin_append(args: &ValRef) -> Result<ValRef, String> {
-    let mut result = ValRef::nil();
-    let mut current = args.as_ref();
-
-    // Collect all items from all lists
-    loop {
-        match current {
-            Value::Cons(list, rest) => {
-                let mut list_cur = list.as_ref();
-                loop {
-                    match list_cur {
-                        Value::Cons(item, item_rest) => {
-                            result = ValRef::cons(item.clone(), result);
-                            list_cur = item_rest.as_ref();
+    while !current.is_nil() {
+        match interp.arena.get(current) {
+            Value::Cons(car, cdr) => {
+                match interp.arena.get(car) {
+                    Value::Number(n) => {
+                        if n == 0 {
+                            return Err(interp.strings.intern("Div by zero").unwrap_or(StrRef(0)));
                         }
-                        Value::Nil => break,
+                        result = result.checked_div(n).ok_or(StrRef(0))?;
+                    }
+                    _ => {
+                        return Err(interp
+                            .strings
+                            .intern("/ needs numbers")
+                            .unwrap_or(StrRef(0)));
+                    }
+                }
+                current = cdr;
+            }
+            _ => break,
+        }
+    }
+
+    interp
+        .arena
+        .alloc(Value::Number(result))
+        .map_err(|_| StrRef(0))
+}
+
+fn builtin_eq<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
+    if interp.list_len(args) != 2 {
+        return Err(interp.strings.intern("= needs 2 args").unwrap_or(StrRef(0)));
+    }
+    let a = interp.list_nth(args, 0).ok_or(StrRef(0))?;
+    let b = interp.list_nth(args, 1).ok_or(StrRef(0))?;
+
+    let (a_num, b_num) = match (interp.arena.get(a), interp.arena.get(b)) {
+        (Value::Number(x), Value::Number(y)) => (x, y),
+        _ => {
+            return Err(interp
+                .strings
+                .intern("= needs numbers")
+                .unwrap_or(StrRef(0)));
+        }
+    };
+
+    interp
+        .arena
+        .alloc(Value::Bool(a_num == b_num))
+        .map_err(|_| StrRef(0))
+}
+
+fn builtin_lt<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
+    if interp.list_len(args) != 2 {
+        return Err(interp.strings.intern("< needs 2 args").unwrap_or(StrRef(0)));
+    }
+    let a = interp.list_nth(args, 0).ok_or(StrRef(0))?;
+    let b = interp.list_nth(args, 1).ok_or(StrRef(0))?;
+
+    let (a_num, b_num) = match (interp.arena.get(a), interp.arena.get(b)) {
+        (Value::Number(x), Value::Number(y)) => (x, y),
+        _ => {
+            return Err(interp
+                .strings
+                .intern("< needs numbers")
+                .unwrap_or(StrRef(0)));
+        }
+    };
+
+    interp
+        .arena
+        .alloc(Value::Bool(a_num < b_num))
+        .map_err(|_| StrRef(0))
+}
+
+fn builtin_gt<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
+    if interp.list_len(args) != 2 {
+        return Err(interp.strings.intern("> needs 2 args").unwrap_or(StrRef(0)));
+    }
+    let a = interp.list_nth(args, 0).ok_or(StrRef(0))?;
+    let b = interp.list_nth(args, 1).ok_or(StrRef(0))?;
+
+    let (a_num, b_num) = match (interp.arena.get(a), interp.arena.get(b)) {
+        (Value::Number(x), Value::Number(y)) => (x, y),
+        _ => {
+            return Err(interp
+                .strings
+                .intern("> needs numbers")
+                .unwrap_or(StrRef(0)));
+        }
+    };
+
+    interp
+        .arena
+        .alloc(Value::Bool(a_num > b_num))
+        .map_err(|_| StrRef(0))
+}
+
+fn builtin_list<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
+    Ok(args)
+}
+
+fn builtin_car<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
+    if interp.list_len(args) != 1 {
+        return Err(interp
+            .strings
+            .intern("car needs 1 arg")
+            .unwrap_or(StrRef(0)));
+    }
+    let list = interp.list_nth(args, 0).ok_or(StrRef(0))?;
+    match interp.arena.get(list) {
+        Value::Cons(car, _) => Ok(car),
+        _ => Err(interp.strings.intern("car needs cons").unwrap_or(StrRef(0))),
+    }
+}
+
+fn builtin_cdr<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
+    if interp.list_len(args) != 1 {
+        return Err(interp
+            .strings
+            .intern("cdr needs 1 arg")
+            .unwrap_or(StrRef(0)));
+    }
+    let list = interp.list_nth(args, 0).ok_or(StrRef(0))?;
+    match interp.arena.get(list) {
+        Value::Cons(_, cdr) => Ok(cdr),
+        _ => Err(interp.strings.intern("cdr needs cons").unwrap_or(StrRef(0))),
+    }
+}
+
+fn builtin_cons_fn<const N: usize>(
+    interp: &Interpreter<N>,
+    args: ValRef,
+) -> Result<ValRef, StrRef> {
+    if interp.list_len(args) != 2 {
+        return Err(interp
+            .strings
+            .intern("cons needs 2 args")
+            .unwrap_or(StrRef(0)));
+    }
+    let car = interp.list_nth(args, 0).ok_or(StrRef(0))?;
+    let cdr = interp.list_nth(args, 1).ok_or(StrRef(0))?;
+    interp.cons(car, cdr).map_err(|_| StrRef(0))
+}
+
+fn builtin_null<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
+    if interp.list_len(args) != 1 {
+        return Err(interp
+            .strings
+            .intern("null? needs 1 arg")
+            .unwrap_or(StrRef(0)));
+    }
+    let val = interp.list_nth(args, 0).ok_or(StrRef(0))?;
+    interp
+        .arena
+        .alloc(Value::Bool(val.is_nil()))
+        .map_err(|_| StrRef(0))
+}
+
+fn builtin_cons_p<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
+    if interp.list_len(args) != 1 {
+        return Err(interp
+            .strings
+            .intern("cons? needs 1 arg")
+            .unwrap_or(StrRef(0)));
+    }
+    let val = interp.list_nth(args, 0).ok_or(StrRef(0))?;
+    let is_cons = matches!(interp.arena.get(val), Value::Cons(_, _));
+    interp
+        .arena
+        .alloc(Value::Bool(is_cons))
+        .map_err(|_| StrRef(0))
+}
+
+fn builtin_length<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
+    if interp.list_len(args) != 1 {
+        return Err(interp
+            .strings
+            .intern("length needs 1 arg")
+            .unwrap_or(StrRef(0)));
+    }
+    let list = interp.list_nth(args, 0).ok_or(StrRef(0))?;
+    let len = interp.list_len(list);
+    interp
+        .arena
+        .alloc(Value::Number(len as i64))
+        .map_err(|_| StrRef(0))
+}
+
+fn builtin_append<const N: usize>(interp: &Interpreter<N>, args: ValRef) -> Result<ValRef, StrRef> {
+    let mut result = ValRef::nil();
+    let mut current = args;
+
+    while !current.is_nil() {
+        match interp.arena.get(current) {
+            Value::Cons(list, rest) => {
+                let mut list_cur = list;
+                while !list_cur.is_nil() {
+                    match interp.arena.get(list_cur) {
+                        Value::Cons(item, item_rest) => {
+                            result = interp.cons(item, result).map_err(|_| StrRef(0))?;
+                            list_cur = item_rest;
+                        }
                         _ => break,
                     }
                 }
-                current = rest.as_ref();
+                current = rest;
             }
-            Value::Nil => break,
-            _ => return Err("Invalid argument list".to_string()),
+            _ => break,
         }
     }
 
-    Ok(reverse_list(result))
+    interp.reverse_list(result).map_err(|_| StrRef(0))
 }
 
-fn builtin_reverse(args: &ValRef) -> Result<ValRef, String> {
-    if args.as_ref().list_len() != 1 {
-        return Err("reverse requires 1 argument".to_string());
+fn builtin_reverse<const N: usize>(
+    interp: &Interpreter<N>,
+    args: ValRef,
+) -> Result<ValRef, StrRef> {
+    if interp.list_len(args) != 1 {
+        return Err(interp
+            .strings
+            .intern("reverse needs 1 arg")
+            .unwrap_or(StrRef(0)));
     }
-    let list = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or("reverse missing argument")?;
-    Ok(reverse_list(list))
-}
-
-// ============================================================================
-// Public API
-// ============================================================================
-
-/// Parse and evaluate a Lisp expression string
-pub fn eval_str(input: &str, env: &EnvRef) -> Result<String, String> {
-    let expr = parse(input)?;
-    let result = eval(expr, env)?;
-    Ok(result.to_string())
-}
-
-/// Parse and evaluate multiple Lisp expressions, returning the last result
-pub fn eval_str_multiple(input: &str, env: &EnvRef) -> Result<String, String> {
-    let expressions = parse_multiple(input)?;
-    if expressions.is_nil() {
-        return Err("No expressions to evaluate".to_string());
-    }
-
-    let mut last_result = ValRef::nil();
-    let mut current = expressions.as_ref();
-
-    loop {
-        match current {
-            Value::Cons(expr, rest) => {
-                last_result = eval(expr.clone(), env)?;
-                current = rest.as_ref();
-            }
-            Value::Nil => break,
-            _ => return Err("Invalid expression list".to_string()),
-        }
-    }
-
-    Ok(last_result.to_string())
+    let list = interp.list_nth(args, 0).ok_or(StrRef(0))?;
+    interp.reverse_list(list).map_err(|_| StrRef(0))
 }

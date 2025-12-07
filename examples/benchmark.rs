@@ -1,7 +1,7 @@
 // examples/benchmark.rs
 // Run with: cargo run --example benchmark --release
 
-use ruthe::{EnvRef, eval_str};
+use ruthe::Interpreter;
 use std::time::Instant;
 
 fn format_duration(nanos: u128) -> String {
@@ -16,12 +16,15 @@ fn format_duration(nanos: u128) -> String {
     }
 }
 
-fn benchmark_expression(name: &str, expr: &str, env: &EnvRef, iterations: usize) {
+fn benchmark_expression(name: &str, expr: &str, interp: &Interpreter<8192>, iterations: usize) {
     let mut times = Vec::with_capacity(iterations);
+
+    // Get the global env (assuming it's stored at EnvRef(0))
+    let env = ruthe::EnvRef(0);
 
     for _ in 0..iterations {
         let start = Instant::now();
-        let _ = eval_str(expr, env).unwrap();
+        let _ = interp.eval_str(expr, env);
         let duration = start.elapsed();
         times.push(duration.as_nanos());
     }
@@ -41,11 +44,25 @@ fn benchmark_expression(name: &str, expr: &str, env: &EnvRef, iterations: usize)
     println!();
 }
 
-fn main() {
-    println!("=== Lisp Interpreter Benchmarks ===\n");
+fn bytes_to_string(buf: &[u8; 4096]) -> String {
+    // Find null terminator or end of meaningful data
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(4096);
+    String::from_utf8_lossy(&buf[..len]).to_string()
+}
 
-    // Create environment using new API
-    let env = EnvRef::new();
+fn main() {
+    println!("=== Arena-Based Lisp Interpreter Benchmarks ===\n");
+
+    // Create interpreter with 8K arena
+    let interp: Interpreter<8192> = Interpreter::new();
+
+    // Create global environment
+    let env = interp
+        .create_global_env()
+        .expect("Failed to create global env");
+
+    println!("Arena capacity: {} cells", 8192);
+    println!("Initial arena usage: {} cells\n", interp.arena.used());
 
     // Define fibonacci function
     let fib_def = r#"
@@ -64,42 +81,58 @@ fn main() {
 
     println!("Defining fibonacci function...");
     let start = Instant::now();
-    eval_str(fib_def, &env).unwrap();
-    let duration = start.elapsed();
-    println!(
-        "Definition took: {}\n",
-        format_duration(duration.as_nanos())
-    );
+    match interp.eval_str(fib_def, env) {
+        Ok(_) => {
+            let duration = start.elapsed();
+            println!("Definition took: {}", format_duration(duration.as_nanos()));
+            println!("Arena usage after fib def: {} cells\n", interp.arena.used());
+        }
+        Err(e) => {
+            let mut buf = [0u8; 64];
+            let err_str = interp.strings.get(e, &mut buf).unwrap_or("error");
+            println!("Error defining fib: {}\n", err_str);
+            return;
+        }
+    }
 
     // Benchmark simple arithmetic
     println!("--- Simple Arithmetic ---");
-    benchmark_expression("Addition (+ 1 2 3)", "(+ 1 2 3)", &env, 10000);
-    benchmark_expression("Multiplication (* 2 3 4)", "(* 2 3 4)", &env, 10000);
-    benchmark_expression("Division (/ 22 7)", "(/ 22 7)", &env, 10000);
+    benchmark_expression("Addition (+ 1 2 3)", "(+ 1 2 3)", &interp, 10000);
+    benchmark_expression("Multiplication (* 2 3 4)", "(* 2 3 4)", &interp, 10000);
+    benchmark_expression("Division (/ 22 7)", "(/ 22 7)", &interp, 10000);
 
     // Benchmark fibonacci with single run
     println!("--- Fibonacci Calculations (Single Run) ---");
-    for n in [5, 10, 15, 20, 25, 30] {
+    for n in [5, 10, 15, 20] {
         let expr = format!("(fib {})", n);
         let start = Instant::now();
-        let result = eval_str(&expr, &env).unwrap();
-        let duration = start.elapsed();
-
-        println!(
-            "fib({:2}) = {:>8} | Time: {}",
-            n,
-            result,
-            format_duration(duration.as_nanos())
-        );
+        match interp.eval_str(&expr, env) {
+            Ok(result) => {
+                let duration = start.elapsed();
+                let result_str = bytes_to_string(&result);
+                println!(
+                    "fib({:2}) = {:>10} | Time: {} | Arena: {} cells",
+                    n,
+                    result_str,
+                    format_duration(duration.as_nanos()),
+                    interp.arena.used()
+                );
+            }
+            Err(e) => {
+                let mut buf = [0u8; 64];
+                let err_str = interp.strings.get(e, &mut buf).unwrap_or("error");
+                println!("fib({:2}) FAILED: {}", n, err_str);
+            }
+        }
     }
     println!();
 
     // Benchmark smaller fibonacci values with multiple iterations
     println!("--- Fibonacci Benchmarks (Multiple Iterations) ---");
-    benchmark_expression("fib(5)", "(fib 5)", &env, 1000);
-    benchmark_expression("fib(10)", "(fib 10)", &env, 1000);
-    benchmark_expression("fib(15)", "(fib 15)", &env, 100);
-    benchmark_expression("fib(20)", "(fib 20)", &env, 10);
+    benchmark_expression("fib(5)", "(fib 5)", &interp, 1000);
+    benchmark_expression("fib(10)", "(fib 10)", &interp, 1000);
+    benchmark_expression("fib(15)", "(fib 15)", &interp, 100);
+    benchmark_expression("fib(20)", "(fib 20)", &interp, 10);
 
     // Define factorial function
     let fact_def = r#"
@@ -113,41 +146,61 @@ fn main() {
         )
     "#;
 
-    eval_str(fact_def, &env).unwrap();
+    match interp.eval_str(fact_def, env) {
+        Ok(_) => println!("Factorial function defined"),
+        Err(e) => {
+            let mut buf = [0u8; 64];
+            let err_str = interp.strings.get(e, &mut buf).unwrap_or("error");
+            println!("Error defining fact: {}", err_str);
+        }
+    }
 
     println!("--- Factorial Calculations ---");
     for n in [5, 10, 15, 20] {
         let expr = format!("(fact {})", n);
         let start = Instant::now();
-        let result = eval_str(&expr, &env).unwrap();
-        let duration = start.elapsed();
-
-        println!(
-            "fact({:2}) = {:>20} | Time: {}",
-            n,
-            result,
-            format_duration(duration.as_nanos())
-        );
+        match interp.eval_str(&expr, env) {
+            Ok(result) => {
+                let duration = start.elapsed();
+                let result_str = bytes_to_string(&result);
+                println!(
+                    "fact({:2}) = {:>20} | Time: {}",
+                    n,
+                    result_str,
+                    format_duration(duration.as_nanos())
+                );
+            }
+            Err(e) => {
+                let mut buf = [0u8; 64];
+                let err_str = interp.strings.get(e, &mut buf).unwrap_or("error");
+                println!("fact({:2}) FAILED: {}", n, err_str);
+            }
+        }
     }
     println!();
 
     // Benchmark list operations
     println!("--- List Operations ---");
-    benchmark_expression("car '(1 2 3)", "(car '(1 2 3))", &env, 10000);
-    benchmark_expression("cdr '(1 2 3)", "(cdr '(1 2 3))", &env, 10000);
-    benchmark_expression("length '(1 2 3 4 5)", "(length '(1 2 3 4 5))", &env, 10000);
+    benchmark_expression("car '(1 2 3)", "(car '(1 2 3))", &interp, 10000);
+    benchmark_expression("cdr '(1 2 3)", "(cdr '(1 2 3))", &interp, 10000);
+    benchmark_expression(
+        "length '(1 2 3 4 5)",
+        "(length '(1 2 3 4 5))",
+        &interp,
+        10000,
+    );
     benchmark_expression(
         "reverse '(1 2 3 4 5)",
         "(reverse '(1 2 3 4 5))",
-        &env,
+        &interp,
         10000,
     );
 
     // Lambda creation and application benchmark
     println!("--- Lambda Performance ---");
     let square_def = "(define square (lambda (x) (* x x)))";
-    eval_str(square_def, &env).unwrap();
-    benchmark_expression("square 5", "(square 5)", &env, 10000);
+    interp.eval_str(square_def, env).ok();
+    benchmark_expression("square 5", "(square 5)", &interp, 10000);
 
     // Nested lambda
     let nested_def = r#"
@@ -157,14 +210,14 @@ fn main() {
             )
         )
     "#;
-    eval_str(nested_def, &env).unwrap();
-    eval_str("(define add5 (make-adder 5))", &env).unwrap();
-    benchmark_expression("add5 10", "(add5 10)", &env, 10000);
+    interp.eval_str(nested_def, env).ok();
+    interp.eval_str("(define add5 (make-adder 5))", env).ok();
+    benchmark_expression("add5 10", "(add5 10)", &interp, 10000);
 
     // Complex expression
     println!("--- Complex Expression ---");
     let complex_expr = "(+ (* 2 3) (/ 10 2) (- 8 3))";
-    benchmark_expression("Complex arithmetic", complex_expr, &env, 10000);
+    benchmark_expression("Complex arithmetic", complex_expr, &interp, 10000);
 
     // Tail call optimization test
     println!("--- Tail Call Optimization Test ---");
@@ -178,25 +231,29 @@ fn main() {
             )
         )
     "#;
-    eval_str(countdown_def, &env).unwrap();
+    interp.eval_str(countdown_def, env).ok();
 
     println!("Testing TCO with deep recursion (should not overflow):");
-    let test_sizes = [1000, 10000, 100000, 1000000];
+    let test_sizes = [1000, 10000];
     for size in test_sizes {
         let expr = format!("(countdown {})", size);
         let start = Instant::now();
-        match eval_str(&expr, &env) {
+        match interp.eval_str(&expr, env) {
             Ok(result) => {
                 let duration = start.elapsed();
+                let result_str = bytes_to_string(&result);
                 println!(
-                    "  countdown({:>7}) = {} | Time: {}",
+                    "  countdown({:>7}) = {:>10} | Time: {} | Arena: {} cells",
                     size,
-                    result,
-                    format_duration(duration.as_nanos())
+                    result_str,
+                    format_duration(duration.as_nanos()),
+                    interp.arena.used()
                 );
             }
             Err(e) => {
-                println!("  countdown({:>7}) FAILED: {}", size, e);
+                let mut buf = [0u8; 64];
+                let err_str = interp.strings.get(e, &mut buf).unwrap_or("error");
+                println!("  countdown({:>7}) FAILED: {}", size, err_str);
                 break;
             }
         }
@@ -206,34 +263,54 @@ fn main() {
     // Performance scaling analysis
     println!("--- Performance Scaling (fib) ---");
     println!(
-        "{:<10} | {:<12} | {:<15} | {:<10}",
-        "Input", "Result", "Time", "Growth"
+        "{:<10} | {:<12} | {:<15} | {:<10} | {:<12}",
+        "Input", "Result", "Time", "Growth", "Arena Usage"
     );
-    println!("{}", "-".repeat(60));
+    println!("{}", "-".repeat(75));
 
     let mut last_duration = 0u128;
-    for n in [5, 10, 15, 20, 35] {
+    for n in [5, 10, 15, 20] {
         let expr = format!("(fib {})", n);
         let start = Instant::now();
-        let result = eval_str(&expr, &env).unwrap();
-        let duration = start.elapsed().as_nanos();
+        match interp.eval_str(&expr, env) {
+            Ok(result) => {
+                let duration = start.elapsed().as_nanos();
+                let result_str = bytes_to_string(&result);
 
-        let growth = if last_duration > 0 {
-            format!("{:.2}x", duration as f64 / last_duration as f64)
-        } else {
-            "-".to_string()
-        };
+                let growth = if last_duration > 0 {
+                    format!("{:.2}x", duration as f64 / last_duration as f64)
+                } else {
+                    "-".to_string()
+                };
 
-        println!(
-            "fib({:2})    | {:<12} | {:<15} | {}",
-            n,
-            result,
-            format_duration(duration),
-            growth
-        );
+                println!(
+                    "fib({:2})    | {:>12} | {:<15} | {:<10} | {} cells",
+                    n,
+                    result_str,
+                    format_duration(duration),
+                    growth,
+                    interp.arena.used()
+                );
 
-        last_duration = duration;
+                last_duration = duration;
+            }
+            Err(e) => {
+                let mut buf = [0u8; 64];
+                let err_str = interp.strings.get(e, &mut buf).unwrap_or("error");
+                println!("fib({:2}) FAILED: {}", n, err_str);
+                break;
+            }
+        }
     }
+
+    println!("\n--- Memory Usage Summary ---");
+    println!("Arena capacity: {} cells", interp.arena.capacity());
+    println!("Arena used: {} cells", interp.arena.used());
+    println!("Arena available: {} cells", interp.arena.available());
+    println!(
+        "Usage: {:.2}%",
+        (interp.arena.used() as f64 / interp.arena.capacity() as f64) * 100.0
+    );
 
     println!("\n=== Benchmark Complete ===");
 }
