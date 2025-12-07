@@ -199,7 +199,7 @@ impl Value {
             Value::Number(n) => format!("{}", n),
             Value::Symbol(s) => s.clone(),
             Value::Bool(b) => if *b { "#t" } else { "#f" }.to_string(),
-            Value::Cons(_, _) => Value::list_to_string(self),
+            Value::Cons(_, _) => self.list_to_string(),
             Value::Builtin(_) => "<builtin>".to_string(),
             Value::Lambda { .. } => "<lambda>".to_string(),
             Value::Nil => "nil".to_string(),
@@ -207,9 +207,9 @@ impl Value {
     }
 
     // Helper function to convert a cons list to string
-    fn list_to_string(val: &Value) -> String {
+    fn list_to_string(&self) -> String {
         let mut items = Vec::new();
-        let mut current = val;
+        let mut current = self;
 
         loop {
             match current {
@@ -238,9 +238,9 @@ impl Value {
     }
 
     // Helper function to get length of a list
-    fn list_len(val: &Value) -> usize {
+    fn list_len(&self) -> usize {
         let mut count = 0;
-        let mut current = val;
+        let mut current = self;
 
         loop {
             match current {
@@ -257,9 +257,9 @@ impl Value {
     }
 
     // Helper function to convert list to vector
-    fn list_to_vec(val: &Value) -> Vec<ValRef> {
+    fn list_to_vec(&self) -> Vec<ValRef> {
         let mut items = Vec::new();
-        let mut current = val;
+        let mut current = self;
 
         loop {
             match current {
@@ -602,7 +602,7 @@ fn eval_step(expr: ValRef, env: &EnvRef) -> Result<EvalResult, String> {
             if let Value::Symbol(sym) = car.as_ref() {
                 match sym.as_str() {
                     "define" => {
-                        let items = Value::list_to_vec(expr.as_ref());
+                        let items = expr.as_ref().list_to_vec();
                         if items.len() != 3 {
                             return Err("define requires 2 arguments".to_string());
                         }
@@ -614,12 +614,12 @@ fn eval_step(expr: ValRef, env: &EnvRef) -> Result<EvalResult, String> {
                         return Ok(EvalResult::Done(val));
                     }
                     "lambda" => {
-                        let items = Value::list_to_vec(expr.as_ref());
+                        let items = expr.as_ref().list_to_vec();
                         if items.len() != 3 {
                             return Err("lambda requires 2 arguments (params body)".to_string());
                         }
 
-                        let params_list = Value::list_to_vec(items[1].as_ref());
+                        let params_list = items[1].as_ref().list_to_vec();
                         let params: Result<Vec<String>, String> = params_list
                             .iter()
                             .map(|p| {
@@ -636,7 +636,7 @@ fn eval_step(expr: ValRef, env: &EnvRef) -> Result<EvalResult, String> {
                         return Ok(EvalResult::Done(ValRef::lambda(params, body, captured_env)));
                     }
                     "if" => {
-                        let items = Value::list_to_vec(expr.as_ref());
+                        let items = expr.as_ref().list_to_vec();
                         if items.len() != 4 {
                             return Err("if requires 3 arguments".to_string());
                         }
@@ -652,7 +652,7 @@ fn eval_step(expr: ValRef, env: &EnvRef) -> Result<EvalResult, String> {
                         ));
                     }
                     "quote" => {
-                        let items = Value::list_to_vec(expr.as_ref());
+                        let items = expr.as_ref().list_to_vec();
                         if items.len() != 2 {
                             return Err("quote requires 1 argument".to_string());
                         }
@@ -849,14 +849,14 @@ fn builtin_length(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 1 {
         return Err("length requires 1 argument".to_string());
     }
-    let len = Value::list_len(args[0].as_ref());
+    let len = args[0].as_ref().list_len();
     Ok(ValRef::number(len as i64))
 }
 
 fn builtin_append(args: &[ValRef]) -> Result<ValRef, String> {
     let mut result = Vec::new();
     for arg in args {
-        let items = Value::list_to_vec(arg.as_ref());
+        let items = arg.as_ref().list_to_vec();
         result.extend(items);
     }
     Ok(ValRef::list(result))
@@ -866,7 +866,7 @@ fn builtin_reverse(args: &[ValRef]) -> Result<ValRef, String> {
     if args.len() != 1 {
         return Err("reverse requires 1 argument".to_string());
     }
-    let mut vec = Value::list_to_vec(args[0].as_ref());
+    let mut vec = args[0].as_ref().list_to_vec();
     vec.reverse();
     Ok(ValRef::list(vec))
 }
