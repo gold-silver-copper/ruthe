@@ -11,7 +11,7 @@ fn eval_test(input: &str) -> Result<String, String> {
     eval_str(input, &env)
         .map(|s| {
             let mut buf = [0u8; 4096];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string() // Changed from to_str_buf
         })
         .map_err(|e| {
             let mut buf = [0u8; 256];
@@ -24,14 +24,13 @@ fn eval_multiple_test(input: &str) -> Result<String, String> {
     eval_str_multiple(input, &env)
         .map(|s| {
             let mut buf = [0u8; 4096];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string() // Changed from to_str_buf
         })
         .map_err(|e| {
             let mut buf = [0u8; 256];
             e.to_str_buf(&mut buf).unwrap().to_string()
         })
 }
-
 // ============================================================================
 // Basic Value Tests
 // ============================================================================
