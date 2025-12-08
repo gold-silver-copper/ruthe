@@ -72,7 +72,7 @@ impl<const N: usize> PartialEq for LispValue<N> {
 }
 
 // ============================================================================
-// Arena with GC
+// Arena with Automatic GC
 // ============================================================================
 
 pub struct Arena<const N: usize> {
@@ -82,6 +82,8 @@ pub struct Arena<const N: usize> {
     free_list: RefCell<[usize; N]>,
     free_count: RefCell<usize>,
     next_free: RefCell<usize>,
+    gc_roots: RefCell<[usize; 256]>,
+    gc_roots_count: RefCell<usize>,
 }
 
 impl<const N: usize> Arena<N> {
@@ -93,6 +95,23 @@ impl<const N: usize> Arena<N> {
             free_list: RefCell::new([0; N]),
             free_count: RefCell::new(0),
             next_free: RefCell::new(0),
+            gc_roots: RefCell::new([0; 256]),
+            gc_roots_count: RefCell::new(0),
+        }
+    }
+
+    pub fn push_root(&self, root: usize) {
+        let mut count = self.gc_roots_count.borrow_mut();
+        if *count < 256 {
+            self.gc_roots.borrow_mut()[*count] = root;
+            *count += 1;
+        }
+    }
+
+    pub fn pop_root(&self) {
+        let mut count = self.gc_roots_count.borrow_mut();
+        if *count > 0 {
+            *count -= 1;
         }
     }
 
@@ -109,7 +128,30 @@ impl<const N: usize> Arena<N> {
 
         let mut next = self.next_free.borrow_mut();
         if *next >= N {
-            return Err(ArenaError::OutOfMemory);
+            // Try GC before giving up
+            drop(next);
+            self.auto_collect();
+
+            // Try again after GC
+            let mut free_count = self.free_count.borrow_mut();
+            if *free_count > 0 {
+                *free_count -= 1;
+                let index = self.free_list.borrow()[*free_count];
+                self.cells.borrow_mut()[index] = value;
+                self.allocated.borrow_mut()[index] = true;
+                return Ok(index);
+            }
+            drop(free_count);
+
+            let mut next = self.next_free.borrow_mut();
+            if *next >= N {
+                return Err(ArenaError::OutOfMemory);
+            }
+            let index = *next;
+            *next += 1;
+            self.cells.borrow_mut()[index] = value;
+            self.allocated.borrow_mut()[index] = true;
+            return Ok(index);
         }
         let index = *next;
         *next += 1;
@@ -171,6 +213,15 @@ impl<const N: usize> Arena<N> {
             }
             marked[i] = false;
         }
+    }
+
+    fn auto_collect(&self) {
+        let count = *self.gc_roots_count.borrow();
+        for i in 0..count {
+            let root = self.gc_roots.borrow()[i];
+            self.mark(root);
+        }
+        self.sweep();
     }
 
     pub fn collect(&self, roots: &[usize]) {
@@ -307,7 +358,9 @@ const NO_PARENT: usize = usize::MAX;
 
 pub fn env_new<const N: usize>(arena: &Arena<N>) -> Result<usize, ArenaError> {
     let bindings = arena.alloc(LispValue::Nil)?;
-    arena.alloc(LispValue::Cons(bindings, NO_PARENT))
+    let env = arena.alloc(LispValue::Cons(bindings, NO_PARENT))?;
+    arena.push_root(env);
+    Ok(env)
 }
 
 fn env_with_parent<const N: usize>(arena: &Arena<N>, parent: usize) -> Result<usize, ArenaError> {
@@ -643,7 +696,9 @@ fn eval_step<const N: usize>(
                         return Err(str_to_list(arena, "define needs symbol").unwrap_or(0));
                     };
                     let body = list_nth(arena, expr, 2).unwrap();
+                    arena.push_root(body);
                     let val = eval(arena, body, env)?;
+                    arena.pop_root(); // body
                     env_set(arena, env, name, val).unwrap();
                     return Ok(EvalResult::Done(val));
                 } else if sym == hash_str("lambda") {
@@ -688,7 +743,9 @@ fn eval_step<const N: usize>(
                         return Err(str_to_list(arena, "if needs 3 args").unwrap_or(0));
                     }
                     let cond_expr = list_nth(arena, expr, 1).unwrap();
+                    arena.push_root(cond_expr);
                     let cond = eval(arena, cond_expr, env)?;
+                    arena.pop_root(); // cond_expr
                     let is_true = match arena.get(cond) {
                         Ok(LispValue::Bool(b)) => b,
                         Ok(LispValue::Nil) => false,
@@ -707,31 +764,61 @@ fn eval_step<const N: usize>(
             }
 
             // Function application
+            arena.push_root(car);
             let func = eval(arena, car, env)?;
+            arena.pop_root(); // car
+            arena.push_root(func); // Protect func from GC
 
             // Evaluate arguments
             let mut args = arena.alloc(LispValue::Nil).unwrap();
+            arena.push_root(args); // Protect args list from GC
+
             let cdr = if let Ok(LispValue::Cons(_, c)) = arena.get(expr) {
                 c
             } else {
+                arena.pop_root(); // args
+                arena.pop_root(); // func
                 return Err(str_to_list(arena, "Invalid call").unwrap_or(0));
             };
             let mut current = cdr;
             loop {
                 match arena.get(current) {
                     Ok(LispValue::Cons(arg, rest)) => {
+                        arena.push_root(arg);
+                        arena.push_root(rest);
                         let evaled = eval(arena, arg, env)?;
+                        arena.pop_root(); // rest
+                        arena.pop_root(); // arg
                         args = arena.alloc(LispValue::Cons(evaled, args)).unwrap();
+                        // Update the args root
+                        let root_count = *arena.gc_roots_count.borrow();
+                        if root_count > 0 {
+                            arena.gc_roots.borrow_mut()[root_count - 1] = args;
+                        }
                         current = rest;
                     }
                     Ok(LispValue::Nil) => break,
-                    _ => return Err(str_to_list(arena, "Bad args").unwrap_or(0)),
+                    _ => {
+                        arena.pop_root(); // args
+                        arena.pop_root(); // func
+                        return Err(str_to_list(arena, "Bad args").unwrap_or(0));
+                    }
                 }
             }
             args = reverse_list(arena, args).unwrap();
+            // Update root after reverse
+            let root_count = *arena.gc_roots_count.borrow();
+            if root_count > 0 {
+                arena.gc_roots.borrow_mut()[root_count - 1] = args;
+            }
 
-            match arena.get(func) {
-                Ok(LispValue::Builtin(f)) => Ok(EvalResult::Done(f(arena, args)?)),
+            let result = match arena.get(func) {
+                Ok(LispValue::Builtin(f)) => {
+                    let res = f(arena, args);
+                    arena.pop_root(); // args
+                    arena.pop_root(); // func
+                    Ok(EvalResult::Done(res?))
+                }
                 Ok(LispValue::Lambda {
                     params,
                     body,
@@ -741,10 +828,13 @@ fn eval_step<const N: usize>(
                     let arg_count = list_len(arena, args);
 
                     if param_count != arg_count {
+                        arena.pop_root(); // args
+                        arena.pop_root(); // func
                         return Err(str_to_list(arena, "Arg count mismatch").unwrap_or(0));
                     }
 
                     let call_env = env_with_parent(arena, lambda_env).unwrap();
+                    arena.push_root(call_env); // Protect new env
 
                     let mut p_cur = params;
                     let mut a_cur = args;
@@ -758,14 +848,28 @@ fn eval_step<const N: usize>(
                                 a_cur = a_rest;
                             }
                             (Ok(LispValue::Nil), Ok(LispValue::Nil)) => break,
-                            _ => return Err(str_to_list(arena, "Param/arg mismatch").unwrap_or(0)),
+                            _ => {
+                                arena.pop_root(); // call_env
+                                arena.pop_root(); // args
+                                arena.pop_root(); // func
+                                return Err(str_to_list(arena, "Param/arg mismatch").unwrap_or(0));
+                            }
                         }
                     }
 
+                    arena.pop_root(); // call_env (not needed, we're passing it in tail call)
+                    arena.pop_root(); // args
+                    arena.pop_root(); // func
                     Ok(EvalResult::TailCall(body, call_env))
                 }
-                _ => Err(str_to_list(arena, "Not callable").unwrap_or(0)),
-            }
+                _ => {
+                    arena.pop_root(); // args
+                    arena.pop_root(); // func
+                    Err(str_to_list(arena, "Not callable").unwrap_or(0))
+                }
+            };
+
+            result
         }
         Ok(LispValue::Nil) => Ok(EvalResult::Done(expr)),
         _ => Err(str_to_list(arena, "Invalid expr").unwrap_or(0)),
@@ -777,15 +881,31 @@ pub fn eval<const N: usize>(
     mut expr: usize,
     mut env: usize,
 ) -> Result<usize, usize> {
-    loop {
-        match eval_step(arena, expr, env)? {
-            EvalResult::Done(val) => return Ok(val),
-            EvalResult::TailCall(new_expr, new_env) => {
+    arena.push_root(expr);
+    arena.push_root(env);
+
+    let result = loop {
+        // Update roots to current values
+        let root_count = *arena.gc_roots_count.borrow();
+        if root_count >= 2 {
+            let mut roots = arena.gc_roots.borrow_mut();
+            roots[root_count - 2] = expr;
+            roots[root_count - 1] = env;
+        }
+
+        match eval_step(arena, expr, env) {
+            Ok(EvalResult::Done(val)) => break Ok(val),
+            Ok(EvalResult::TailCall(new_expr, new_env)) => {
                 expr = new_expr;
                 env = new_env;
             }
+            Err(e) => break Err(e),
         }
-    }
+    };
+
+    arena.pop_root(); // env
+    arena.pop_root(); // expr
+    result
 }
 
 // ============================================================================
@@ -913,18 +1033,17 @@ fn builtin_eq<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, us
     }
     let a = list_nth(arena, args, 0).unwrap();
     let b = list_nth(arena, args, 1).unwrap();
-    let an = if let Ok(LispValue::Number(n)) = arena.get(a) {
-        n
-    } else {
-        return Err(str_to_list(arena, "= needs numbers").unwrap_or(0));
+
+    let result = match (arena.get(a), arena.get(b)) {
+        (Ok(LispValue::Number(an)), Ok(LispValue::Number(bn))) => an == bn,
+        (Ok(LispValue::Nil), Ok(LispValue::Nil)) => true,
+        (Ok(LispValue::Symbol(sa)), Ok(LispValue::Symbol(sb))) => sa == sb,
+        (Ok(LispValue::Bool(ba)), Ok(LispValue::Bool(bb))) => ba == bb,
+        _ => a == b, // Pointer equality for other types
     };
-    let bn = if let Ok(LispValue::Number(n)) = arena.get(b) {
-        n
-    } else {
-        return Err(str_to_list(arena, "= needs numbers").unwrap_or(0));
-    };
+
     arena
-        .alloc(LispValue::Bool(an == bn))
+        .alloc(LispValue::Bool(result))
         .map_err(|_| str_to_list(arena, "Out of memory").unwrap_or(0))
 }
 
@@ -1150,10 +1269,6 @@ mod tests {
 
         // This should work with TCO even for large n
         assert_eq!(eval_str(&arena, "(count-down 100)", env).unwrap(), 0);
-
-        // Run GC before the big test
-        arena.collect(&[env]);
-
         assert_eq!(eval_str(&arena, "(count-down 500)", env).unwrap(), 0);
     }
 
