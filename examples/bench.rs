@@ -212,7 +212,7 @@ fn main() {
     println!("{}", "-".repeat(60));
 
     let mut last_duration = 0u128;
-    for n in [5, 10, 15, 20, 35] {
+    for n in [5, 10, 15, 20, 25] {
         let expr = format!("(fib {})", n);
         let start = Instant::now();
         let result = eval_str(&expr, &env).unwrap();
