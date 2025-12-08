@@ -6,17 +6,18 @@ use core::cell::RefCell;
 // Core Data Types
 // ============================================================================
 
-pub type BuiltinFn<const N: usize> = fn(&Arena<N>, usize) -> Result<usize, usize>;
+pub type BuiltinFn<const N: usize, const MAX_ROOTS: usize = 256> =
+    fn(&Arena<N, MAX_ROOTS>, usize) -> Result<usize, usize>;
 
 #[derive(Clone, Copy)]
-pub enum LispValue<const N: usize> {
+pub enum LispValue<const N: usize, const MAX_ROOTS: usize = 256> {
     Nil,
     Number(i32),
     Symbol(u32),
     Cons(usize, usize),
     Bool(bool),
     Char(char),
-    Builtin(BuiltinFn<N>),
+    Builtin(BuiltinFn<N, MAX_ROOTS>),
     Lambda {
         params: usize,
         body: usize,
@@ -24,7 +25,7 @@ pub enum LispValue<const N: usize> {
     },
 }
 
-impl<const N: usize> core::fmt::Debug for LispValue<N> {
+impl<const N: usize, const MAX_ROOTS: usize> core::fmt::Debug for LispValue<N, MAX_ROOTS> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Nil => write!(f, "Nil"),
@@ -45,7 +46,7 @@ impl<const N: usize> core::fmt::Debug for LispValue<N> {
     }
 }
 
-impl<const N: usize> PartialEq for LispValue<N> {
+impl<const N: usize, const MAX_ROOTS: usize> PartialEq for LispValue<N, MAX_ROOTS> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Nil, Self::Nil) => true,
@@ -75,18 +76,18 @@ impl<const N: usize> PartialEq for LispValue<N> {
 // Arena with Automatic GC
 // ============================================================================
 
-pub struct Arena<const N: usize> {
+pub struct Arena<const N: usize, const MAX_ROOTS: usize = 256> {
     cells: RefCell<[LispValue<N>; N]>,
     allocated: RefCell<[bool; N]>,
     marked: RefCell<[bool; N]>,
     free_list: RefCell<[usize; N]>,
     free_count: RefCell<usize>,
     next_free: RefCell<usize>,
-    gc_roots: RefCell<[usize; 256]>,
+    gc_roots: RefCell<[usize; MAX_ROOTS]>,
     gc_roots_count: RefCell<usize>,
 }
 
-impl<const N: usize> Arena<N> {
+impl<const N: usize, const MAX_ROOTS: usize> Arena<N, MAX_ROOTS> {
     pub const fn new() -> Self {
         Arena {
             cells: RefCell::new([LispValue::Nil; N]),
@@ -95,14 +96,14 @@ impl<const N: usize> Arena<N> {
             free_list: RefCell::new([0; N]),
             free_count: RefCell::new(0),
             next_free: RefCell::new(0),
-            gc_roots: RefCell::new([0; 256]),
+            gc_roots: RefCell::new([0; MAX_ROOTS]),
             gc_roots_count: RefCell::new(0),
         }
     }
 
     pub fn push_root(&self, root: usize) {
         let mut count = self.gc_roots_count.borrow_mut();
-        if *count < 256 {
+        if *count < MAX_ROOTS {
             self.gc_roots.borrow_mut()[*count] = root;
             *count += 1;
         }
@@ -246,7 +247,10 @@ pub enum ArenaError {
 // String/Symbol Utilities (stored as cons lists of chars)
 // ============================================================================
 
-fn str_to_list<const N: usize>(arena: &Arena<N>, s: &str) -> Result<usize, ArenaError> {
+fn str_to_list<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    s: &str,
+) -> Result<usize, ArenaError> {
     let mut result = arena.alloc(LispValue::Nil)?;
     for ch in s.chars().rev() {
         let ch_val = arena.alloc(LispValue::Char(ch))?;
@@ -263,8 +267,8 @@ pub fn hash_str(s: &str) -> u32 {
     hash
 }
 
-fn list_to_str<'a, const N: usize>(
-    arena: &Arena<N>,
+fn list_to_str<'a, const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
     idx: usize,
     buf: &'a mut [u8],
 ) -> Result<&'a str, ()> {
@@ -297,7 +301,10 @@ fn list_to_str<'a, const N: usize>(
     core::str::from_utf8(&buf[..pos]).map_err(|_| ())
 }
 
-fn reverse_list<const N: usize>(arena: &Arena<N>, list: usize) -> Result<usize, ArenaError> {
+fn reverse_list<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    list: usize,
+) -> Result<usize, ArenaError> {
     let mut result = arena.alloc(LispValue::Nil)?;
     let mut current = list;
 
@@ -315,7 +322,10 @@ fn reverse_list<const N: usize>(arena: &Arena<N>, list: usize) -> Result<usize, 
     Ok(result)
 }
 
-fn list_len<const N: usize>(arena: &Arena<N>, list: usize) -> usize {
+fn list_len<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    list: usize,
+) -> usize {
     let mut count = 0;
     let mut current = list;
 
@@ -332,7 +342,11 @@ fn list_len<const N: usize>(arena: &Arena<N>, list: usize) -> usize {
     count
 }
 
-fn list_nth<const N: usize>(arena: &Arena<N>, list: usize, n: usize) -> Option<usize> {
+fn list_nth<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    list: usize,
+    n: usize,
+) -> Option<usize> {
     let mut current = list;
     let mut idx = 0;
 
@@ -356,20 +370,25 @@ fn list_nth<const N: usize>(arena: &Arena<N>, list: usize, n: usize) -> Option<u
 
 const NO_PARENT: usize = usize::MAX;
 
-pub fn env_new<const N: usize>(arena: &Arena<N>) -> Result<usize, ArenaError> {
+pub fn env_new<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+) -> Result<usize, ArenaError> {
     let bindings = arena.alloc(LispValue::Nil)?;
     let env = arena.alloc(LispValue::Cons(bindings, NO_PARENT))?;
     arena.push_root(env);
     Ok(env)
 }
 
-fn env_with_parent<const N: usize>(arena: &Arena<N>, parent: usize) -> Result<usize, ArenaError> {
+fn env_with_parent<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    parent: usize,
+) -> Result<usize, ArenaError> {
     let bindings = arena.alloc(LispValue::Nil)?;
     arena.alloc(LispValue::Cons(bindings, parent))
 }
 
-fn env_set<const N: usize>(
-    arena: &Arena<N>,
+fn env_set<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
     env: usize,
     name: u32,
     value: usize,
@@ -383,7 +402,11 @@ fn env_set<const N: usize>(
     Ok(())
 }
 
-fn env_get<const N: usize>(arena: &Arena<N>, env: usize, name: u32) -> Option<usize> {
+fn env_get<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    env: usize,
+    name: u32,
+) -> Option<usize> {
     if let Ok(LispValue::Cons(bindings, parent)) = arena.get(env) {
         let mut current = bindings;
 
@@ -415,7 +438,10 @@ fn env_get<const N: usize>(arena: &Arena<N>, env: usize, name: u32) -> Option<us
 // Tokenizer
 // ============================================================================
 
-fn tokenize<const N: usize>(arena: &Arena<N>, input: &str) -> Result<usize, usize> {
+fn tokenize<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    input: &str,
+) -> Result<usize, usize> {
     let mut result = arena
         .alloc(LispValue::Nil)
         .map_err(|_| str_to_list(arena, "Out of memory").unwrap_or(0))?;
@@ -572,7 +598,10 @@ fn parse_i32(s: &str) -> Result<i32, ()> {
 // Parser
 // ============================================================================
 
-fn parse_tokens<const N: usize>(arena: &Arena<N>, tokens: usize) -> Result<(usize, usize), usize> {
+fn parse_tokens<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    tokens: usize,
+) -> Result<(usize, usize), usize> {
     match arena.get(tokens) {
         Ok(LispValue::Nil) => Err(str_to_list(arena, "Unexpected end").unwrap_or(0)),
         Ok(LispValue::Cons(first, rest)) => match arena.get(first) {
@@ -638,7 +667,10 @@ fn parse_tokens<const N: usize>(arena: &Arena<N>, tokens: usize) -> Result<(usiz
     }
 }
 
-pub fn parse<const N: usize>(arena: &Arena<N>, input: &str) -> Result<usize, usize> {
+pub fn parse<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    input: &str,
+) -> Result<usize, usize> {
     let tokens = tokenize(arena, input)?;
     if let Ok(LispValue::Nil) = arena.get(tokens) {
         // Allow empty input, return nil
@@ -663,8 +695,8 @@ enum EvalResult {
     TailCall(usize, usize),
 }
 
-fn eval_step<const N: usize>(
-    arena: &Arena<N>,
+fn eval_step<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
     expr: usize,
     env: usize,
 ) -> Result<EvalResult, usize> {
@@ -876,8 +908,8 @@ fn eval_step<const N: usize>(
     }
 }
 
-pub fn eval<const N: usize>(
-    arena: &Arena<N>,
+pub fn eval<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
     mut expr: usize,
     mut env: usize,
 ) -> Result<usize, usize> {
@@ -912,7 +944,10 @@ pub fn eval<const N: usize>(
 // Builtins
 // ============================================================================
 
-fn builtin_add<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, usize> {
+fn builtin_add<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    args: usize,
+) -> Result<usize, usize> {
     let mut result: i32 = 0;
     let mut current = args;
     loop {
@@ -936,7 +971,10 @@ fn builtin_add<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, u
         .map_err(|_| str_to_list(arena, "Out of memory").unwrap_or(0))
 }
 
-fn builtin_sub<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, usize> {
+fn builtin_sub<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    args: usize,
+) -> Result<usize, usize> {
     let len = list_len(arena, args);
     if len == 0 {
         return Err(str_to_list(arena, "- needs args").unwrap_or(0));
@@ -982,7 +1020,10 @@ fn builtin_sub<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, u
         .map_err(|_| str_to_list(arena, "Out of memory").unwrap_or(0))
 }
 
-fn builtin_mul<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, usize> {
+fn builtin_mul<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    args: usize,
+) -> Result<usize, usize> {
     let mut result: i32 = 1;
     let mut current = args;
     loop {
@@ -1006,7 +1047,10 @@ fn builtin_mul<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, u
         .map_err(|_| str_to_list(arena, "Out of memory").unwrap_or(0))
 }
 
-fn builtin_lt<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, usize> {
+fn builtin_lt<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    args: usize,
+) -> Result<usize, usize> {
     if list_len(arena, args) != 2 {
         return Err(str_to_list(arena, "< needs 2 args").unwrap_or(0));
     }
@@ -1027,7 +1071,10 @@ fn builtin_lt<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, us
         .map_err(|_| str_to_list(arena, "Out of memory").unwrap_or(0))
 }
 
-fn builtin_eq<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, usize> {
+fn builtin_eq<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    args: usize,
+) -> Result<usize, usize> {
     if list_len(arena, args) != 2 {
         return Err(str_to_list(arena, "= needs 2 args").unwrap_or(0));
     }
@@ -1047,7 +1094,10 @@ fn builtin_eq<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, us
         .map_err(|_| str_to_list(arena, "Out of memory").unwrap_or(0))
 }
 
-fn builtin_cons<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, usize> {
+fn builtin_cons<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    args: usize,
+) -> Result<usize, usize> {
     if list_len(arena, args) != 2 {
         return Err(str_to_list(arena, "cons needs 2 args").unwrap_or(0));
     }
@@ -1058,7 +1108,10 @@ fn builtin_cons<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, 
         .map_err(|_| str_to_list(arena, "Out of memory").unwrap_or(0))
 }
 
-fn builtin_car<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, usize> {
+fn builtin_car<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    args: usize,
+) -> Result<usize, usize> {
     if list_len(arena, args) != 1 {
         return Err(str_to_list(arena, "car needs 1 arg").unwrap_or(0));
     }
@@ -1070,7 +1123,10 @@ fn builtin_car<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, u
     }
 }
 
-fn builtin_cdr<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, usize> {
+fn builtin_cdr<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    args: usize,
+) -> Result<usize, usize> {
     if list_len(arena, args) != 1 {
         return Err(str_to_list(arena, "cdr needs 1 arg").unwrap_or(0));
     }
@@ -1082,7 +1138,9 @@ fn builtin_cdr<const N: usize>(arena: &Arena<N>, args: usize) -> Result<usize, u
     }
 }
 
-pub fn init_env<const N: usize>(arena: &Arena<N>) -> Result<usize, ArenaError> {
+pub fn init_env<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+) -> Result<usize, ArenaError> {
     let env = env_new(arena)?;
     let nil = arena.alloc(LispValue::Nil)?;
     env_set(arena, env, hash_str("nil"), nil)?;
@@ -1137,7 +1195,11 @@ pub fn init_env<const N: usize>(arena: &Arena<N>) -> Result<usize, ArenaError> {
     Ok(env)
 }
 
-pub fn eval_str<const N: usize>(arena: &Arena<N>, input: &str, env: usize) -> Result<i32, ()> {
+pub fn eval_str<const N: usize, const MAX_ROOTS: usize>(
+    arena: &Arena<N, MAX_ROOTS>,
+    input: &str,
+    env: usize,
+) -> Result<i32, ()> {
     let expr = parse(arena, input).map_err(|_| ())?;
     let result = eval(arena, expr, env).map_err(|_| ())?;
     if let Ok(LispValue::Number(n)) = arena.get(result) {
