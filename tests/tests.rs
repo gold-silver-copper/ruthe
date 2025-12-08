@@ -1,1120 +1,990 @@
-#[cfg(test)]
-mod gc_tests {
-    use ruthe::*;
+#![cfg(test)]
 
-    // ============================================================================
-    // Basic GC Functionality Tests
-    // ============================================================================
+use ruthe::*;
+extern crate alloc;
+// ============================================================================
+// Helper Functions
+// ============================================================================
 
-    #[test]
-    fn test_basic_arithmetic() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+fn eval_test(input: &str) -> Result<String, String> {
+    let env = EnvRef::new();
+    eval_str(input, &env)
+        .map(|s| {
+            let mut buf = [0u8; 4096];
+            s.to_str_buf(&mut buf).unwrap().to_string()
+        })
+        .map_err(|e| {
+            let mut buf = [0u8; 256];
+            e.to_str_buf(&mut buf).unwrap().to_string()
+        })
+}
 
-        assert_eq!(eval_str(&arena, "(+ 1 2)", env).unwrap(), 3);
-        assert_eq!(eval_str(&arena, "(- 10 3)", env).unwrap(), 7);
-        assert_eq!(eval_str(&arena, "(* 4 5)", env).unwrap(), 20);
-    }
+fn eval_multiple_test(input: &str) -> Result<String, String> {
+    let env = EnvRef::new();
+    eval_str_multiple(input, &env)
+        .map(|s| {
+            let mut buf = [0u8; 4096];
+            s.to_str_buf(&mut buf).unwrap().to_string()
+        })
+        .map_err(|e| {
+            let mut buf = [0u8; 256];
+            e.to_str_buf(&mut buf).unwrap().to_string()
+        })
+}
 
-    #[test]
-    fn test_nested_arithmetic() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+// ============================================================================
+// Basic Value Tests
+// ============================================================================
 
-        assert_eq!(eval_str(&arena, "(+ (* 2 3) 4)", env).unwrap(), 10);
-        assert_eq!(eval_str(&arena, "(- (* 5 4) (+ 2 3))", env).unwrap(), 15);
-    }
+#[test]
+fn test_numbers() {
+    assert_eq!(eval_test("42"), Ok("42".to_string()));
+    assert_eq!(eval_test("-17"), Ok("-17".to_string()));
+    assert_eq!(eval_test("0"), Ok("0".to_string()));
+}
 
-    #[test]
-    fn test_define() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+#[test]
+fn test_booleans() {
+    assert_eq!(eval_test("#t"), Ok("#t".to_string()));
+    assert_eq!(eval_test("#f"), Ok("#f".to_string()));
+}
 
-        let expr = parse(&arena, "(define x 42)").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
+#[test]
+fn test_nil() {
+    assert_eq!(eval_test("nil"), Ok("nil".to_string()));
+}
 
-        assert_eq!(eval_str(&arena, "x", env).unwrap(), 42);
-    }
+// ============================================================================
+// Arithmetic Tests
+// ============================================================================
 
-    #[test]
-    fn test_lambda() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+#[test]
+fn test_addition() {
+    assert_eq!(eval_test("(+ 1 2)"), Ok("3".to_string()));
+    assert_eq!(eval_test("(+ 1 2 3 4 5)"), Ok("15".to_string()));
+    assert_eq!(eval_test("(+)"), Ok("0".to_string()));
+    assert_eq!(eval_test("(+ -5 10)"), Ok("5".to_string()));
+}
 
-        let expr = parse(&arena, "(define double (lambda (x) (* x 2)))").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
+#[test]
+fn test_subtraction() {
+    assert_eq!(eval_test("(- 10 3)"), Ok("7".to_string()));
+    assert_eq!(eval_test("(- 5)"), Ok("-5".to_string()));
+    assert_eq!(eval_test("(- 20 5 3)"), Ok("12".to_string()));
+    assert_eq!(eval_test("(- 0 5)"), Ok("-5".to_string()));
+}
 
-        assert_eq!(eval_str(&arena, "(double 21)", env).unwrap(), 42);
-    }
+#[test]
+fn test_multiplication() {
+    assert_eq!(eval_test("(* 2 3)"), Ok("6".to_string()));
+    assert_eq!(eval_test("(* 2 3 4)"), Ok("24".to_string()));
+    assert_eq!(eval_test("(*)"), Ok("1".to_string()));
+    assert_eq!(eval_test("(* -2 5)"), Ok("-10".to_string()));
+}
 
-    #[test]
-    fn test_if() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+#[test]
+fn test_division() {
+    assert_eq!(eval_test("(/ 10 2)"), Ok("5".to_string()));
+    assert_eq!(eval_test("(/ 20 4 2)"), Ok("2".to_string()));
+    assert_eq!(eval_test("(/ 100 10)"), Ok("10".to_string()));
+    assert!(eval_test("(/ 10 0)").is_err());
+}
 
-        assert_eq!(eval_str(&arena, "(if #t 1 2)", env).unwrap(), 1);
-        assert_eq!(eval_str(&arena, "(if #f 1 2)", env).unwrap(), 2);
-        assert_eq!(eval_str(&arena, "(if (< 3 5) 10 20)", env).unwrap(), 10);
-    }
+#[test]
+fn test_nested_arithmetic() {
+    assert_eq!(eval_test("(+ (* 2 3) (- 10 5))"), Ok("11".to_string()));
+    assert_eq!(eval_test("(* (+ 1 2) (+ 3 4))"), Ok("21".to_string()));
+    assert_eq!(eval_test("(- (* 10 5) (/ 20 4))"), Ok("45".to_string()));
+}
 
-    #[test]
-    fn test_factorial_recursive() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+// ============================================================================
+// Comparison Tests
+// ============================================================================
 
-        let code = "
-            (define fact 
-              (lambda (n) 
-                (if (= n 0) 
-                    1 
-                    (* n (fact (- n 1))))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
+#[test]
+fn test_equality() {
+    assert_eq!(eval_test("(= 5 5)"), Ok("#t".to_string()));
+    assert_eq!(eval_test("(= 5 6)"), Ok("#f".to_string()));
+    assert_eq!(eval_test("(= (+ 2 3) 5)"), Ok("#t".to_string()));
+}
 
-        assert_eq!(eval_str(&arena, "(fact 5)", env).unwrap(), 120);
-    }
+#[test]
+fn test_less_than() {
+    assert_eq!(eval_test("(< 3 5)"), Ok("#t".to_string()));
+    assert_eq!(eval_test("(< 5 3)"), Ok("#f".to_string()));
+    assert_eq!(eval_test("(< 5 5)"), Ok("#f".to_string()));
+}
 
-    #[test]
-    fn test_fibonacci_tail_recursive() {
-        let arena: Arena<4000, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+#[test]
+fn test_greater_than() {
+    assert_eq!(eval_test("(> 5 3)"), Ok("#t".to_string()));
+    assert_eq!(eval_test("(> 3 5)"), Ok("#f".to_string()));
+    assert_eq!(eval_test("(> 5 5)"), Ok("#f".to_string()));
+}
 
-        let code = "
-            (define fib-iter
-              (lambda (a b count)
-                (if (= count 0)
-                    a
-                    (fib-iter b (+ a b) (- count 1)))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
+// ============================================================================
+// List Operations Tests
+// ============================================================================
 
-        let code2 = "
-            (define fib 
-              (lambda (n) 
-                (fib-iter 0 1 n)))
-        ";
-        let expr2 = parse(&arena, code2).unwrap();
-        let _ = eval(&arena, expr2, env).unwrap();
+#[test]
+fn test_list() {
+    assert_eq!(eval_test("(list 1 2 3)"), Ok("(1 2 3)".to_string()));
+    assert_eq!(eval_test("(list)"), Ok("nil".to_string()));
+    assert_eq!(eval_test("(list 1)"), Ok("(1)".to_string()));
+}
 
-        assert_eq!(eval_str(&arena, "(fib 10)", env).unwrap(), 55);
-        assert_eq!(eval_str(&arena, "(fib 20)", env).unwrap(), 6765);
-    }
+#[test]
+fn test_cons() {
+    assert_eq!(eval_test("(cons 1 (list 2 3))"), Ok("(1 2 3)".to_string()));
+    assert_eq!(eval_test("(cons 1 nil)"), Ok("(1)".to_string()));
+    assert_eq!(eval_test("(cons 1 2)"), Ok("(1 . 2)".to_string()));
+}
 
-    #[test]
-    fn test_tco_deep_recursion() {
-        let arena: Arena<8000, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+#[test]
+fn test_car() {
+    assert_eq!(eval_test("(car (list 1 2 3))"), Ok("1".to_string()));
+    assert_eq!(eval_test("(car (cons 5 10))"), Ok("5".to_string()));
+    assert!(eval_test("(car nil)").is_err());
+}
 
-        // This would stack overflow without TCO
-        let code = "
-            (define count-down
-              (lambda (n)
+#[test]
+fn test_cdr() {
+    assert_eq!(eval_test("(cdr (list 1 2 3))"), Ok("(2 3)".to_string()));
+    assert_eq!(eval_test("(cdr (list 1))"), Ok("nil".to_string()));
+    assert_eq!(eval_test("(cdr (cons 5 10))"), Ok("10".to_string()));
+    assert!(eval_test("(cdr nil)").is_err());
+}
+
+#[test]
+fn test_null_predicate() {
+    assert_eq!(eval_test("(null? nil)"), Ok("#t".to_string()));
+    assert_eq!(eval_test("(null? (list))"), Ok("#t".to_string()));
+    assert_eq!(eval_test("(null? (list 1))"), Ok("#f".to_string()));
+    assert_eq!(eval_test("(null? 5)"), Ok("#f".to_string()));
+}
+
+#[test]
+fn test_cons_predicate() {
+    assert_eq!(eval_test("(cons? (list 1 2))"), Ok("#t".to_string()));
+    assert_eq!(eval_test("(cons? (cons 1 2))"), Ok("#t".to_string()));
+    assert_eq!(eval_test("(cons? nil)"), Ok("#f".to_string()));
+    assert_eq!(eval_test("(cons? 5)"), Ok("#f".to_string()));
+}
+
+#[test]
+fn test_length() {
+    assert_eq!(eval_test("(length (list 1 2 3))"), Ok("3".to_string()));
+    assert_eq!(eval_test("(length nil)"), Ok("0".to_string()));
+    assert_eq!(eval_test("(length (list 1))"), Ok("1".to_string()));
+}
+
+#[test]
+fn test_append() {
+    assert_eq!(
+        eval_test("(append (list 1 2) (list 3 4))"),
+        Ok("(1 2 3 4)".to_string())
+    );
+    assert_eq!(eval_test("(append (list 1) nil)"), Ok("(1)".to_string()));
+    assert_eq!(eval_test("(append nil (list 1))"), Ok("(1)".to_string()));
+    assert_eq!(eval_test("(append nil nil)"), Ok("nil".to_string()));
+}
+
+#[test]
+fn test_reverse() {
+    assert_eq!(
+        eval_test("(reverse (list 1 2 3))"),
+        Ok("(3 2 1)".to_string())
+    );
+    assert_eq!(eval_test("(reverse nil)"), Ok("nil".to_string()));
+    assert_eq!(eval_test("(reverse (list 1))"), Ok("(1)".to_string()));
+}
+
+// ============================================================================
+// Quote Tests
+// ============================================================================
+
+#[test]
+fn test_quote() {
+    assert_eq!(eval_test("(quote x)"), Ok("x".to_string()));
+    assert_eq!(eval_test("(quote (1 2 3))"), Ok("(1 2 3)".to_string()));
+    assert_eq!(eval_test("'x"), Ok("x".to_string()));
+    assert_eq!(eval_test("'(1 2 3)"), Ok("(1 2 3)".to_string()));
+}
+
+// ============================================================================
+// Define Tests
+// ============================================================================
+
+#[test]
+fn test_define() {
+    let env = EnvRef::new();
+    assert_eq!(
+        eval_str("(define x 42)", &env).map(|s| {
+            let mut buf = [0u8; 256];
+            s.to_str_buf(&mut buf).unwrap().to_string()
+        }),
+        Ok("42".to_string())
+    );
+    assert_eq!(
+        eval_str("x", &env).map(|s| {
+            let mut buf = [0u8; 256];
+            s.to_str_buf(&mut buf).unwrap().to_string()
+        }),
+        Ok("42".to_string())
+    );
+}
+
+#[test]
+fn test_define_expression() {
+    let env = EnvRef::new();
+    eval_str("(define y (+ 10 20))", &env).unwrap();
+    assert_eq!(
+        eval_str("y", &env).map(|s| {
+            let mut buf = [0u8; 256];
+            s.to_str_buf(&mut buf).unwrap().to_string()
+        }),
+        Ok("30".to_string())
+    );
+}
+
+// ============================================================================
+// Lambda Tests
+// ============================================================================
+
+#[test]
+fn test_lambda_basic() {
+    assert_eq!(eval_test("((lambda (x) (+ x 1)) 5)"), Ok("6".to_string()));
+    assert_eq!(
+        eval_test("((lambda (x y) (+ x y)) 3 4)"),
+        Ok("7".to_string())
+    );
+}
+
+#[test]
+fn test_lambda_no_args() {
+    assert_eq!(eval_test("((lambda () 42))"), Ok("42".to_string()));
+}
+
+#[test]
+fn test_lambda_closure() {
+    let env = EnvRef::new();
+    eval_str("(define x 10)", &env).unwrap();
+    eval_str("(define f (lambda (y) (+ x y)))", &env).unwrap();
+    assert_eq!(
+        eval_str("(f 5)", &env).map(|s| {
+            let mut buf = [0u8; 256];
+            s.to_str_buf(&mut buf).unwrap().to_string()
+        }),
+        Ok("15".to_string())
+    );
+}
+
+#[test]
+fn test_lambda_nested() {
+    assert_eq!(
+        eval_test("((lambda (x) ((lambda (y) (+ x y)) 3)) 5)"),
+        Ok("8".to_string())
+    );
+}
+
+#[test]
+fn test_higher_order_function() {
+    let env = EnvRef::new();
+    eval_str(
+        "(define make-adder (lambda (n) (lambda (x) (+ x n))))",
+        &env,
+    )
+    .unwrap();
+    eval_str("(define add5 (make-adder 5))", &env).unwrap();
+    assert_eq!(
+        eval_str("(add5 10)", &env).map(|s| {
+            let mut buf = [0u8; 256];
+            s.to_str_buf(&mut buf).unwrap().to_string()
+        }),
+        Ok("15".to_string())
+    );
+}
+
+// ============================================================================
+// If Tests
+// ============================================================================
+
+#[test]
+fn test_if_true() {
+    assert_eq!(eval_test("(if #t 1 2)"), Ok("1".to_string()));
+    assert_eq!(eval_test("(if (< 3 5) 10 20)"), Ok("10".to_string()));
+}
+
+#[test]
+fn test_if_false() {
+    assert_eq!(eval_test("(if #f 1 2)"), Ok("2".to_string()));
+    assert_eq!(eval_test("(if (> 3 5) 10 20)"), Ok("20".to_string()));
+}
+
+#[test]
+fn test_if_nil_is_false() {
+    assert_eq!(eval_test("(if nil 1 2)"), Ok("2".to_string()));
+}
+
+#[test]
+fn test_if_non_boolean_is_true() {
+    assert_eq!(eval_test("(if 5 1 2)"), Ok("1".to_string()));
+    assert_eq!(eval_test("(if (list 1) 1 2)"), Ok("1".to_string()));
+}
+
+#[test]
+fn test_if_nested() {
+    assert_eq!(eval_test("(if #t (if #f 1 2) 3)"), Ok("2".to_string()));
+}
+
+// ============================================================================
+// Recursive Function Tests
+// ============================================================================
+
+#[test]
+fn test_factorial() {
+    let program = r#"
+        (define fact
+          (lambda (n)
+            (if (= n 0)
+                1
+                (* n (fact (- n 1))))))
+        (fact 5)
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("120".to_string()));
+}
+
+#[test]
+fn test_factorial_larger() {
+    let program = r#"
+        (define fact
+          (lambda (n)
+            (if (= n 0)
+                1
+                (* n (fact (- n 1))))))
+        (fact 10)
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("3628800".to_string()));
+}
+
+#[test]
+fn test_fibonacci() {
+    let program = r#"
+        (define fib
+          (lambda (n)
+            (if (< n 2)
+                n
+                (+ (fib (- n 1)) (fib (- n 2))))))
+        (fib 10)
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("55".to_string()));
+}
+
+#[test]
+fn test_fibonacci_small() {
+    let program = r#"
+        (define fib
+          (lambda (n)
+            (if (< n 2)
+                n
+                (+ (fib (- n 1)) (fib (- n 2))))))
+        (fib 6)
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("8".to_string()));
+}
+
+#[test]
+fn test_countdown() {
+    let program = r#"
+        (define countdown
+          (lambda (n)
+            (if (= n 0)
+                0
+                (countdown (- n 1)))))
+        (countdown 1000)
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("0".to_string()));
+}
+
+#[test]
+fn test_countdown_large() {
+    let program = r#"
+        (define countdown
+          (lambda (n)
+            (if (= n 0)
+                0
+                (countdown (- n 1)))))
+        (countdown 5000)
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("0".to_string()));
+}
+
+#[test]
+fn test_ackermann() {
+    let program = r#"
+        (define ack
+          (lambda (m n)
+            (if (= m 0)
+                (+ n 1)
                 (if (= n 0)
-                    0
-                    (count-down (- n 1)))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        // This should work with TCO even for large n
-        assert_eq!(eval_str(&arena, "(count-down 100)", env).unwrap(), 0);
-        assert_eq!(eval_str(&arena, "(count-down 500)", env).unwrap(), 0);
-    }
-
-    #[test]
-    fn test_gc_with_fibonacci() {
-        let arena: Arena<4000, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "
-            (define fib-iter
-              (lambda (a b count)
-                (if (= count 0)
-                    a
-                    (fib-iter b (+ a b) (- count 1)))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _fib_iter = eval(&arena, expr, env).unwrap();
-
-        let code2 = "
-            (define fib 
-              (lambda (n) 
-                (fib-iter 0 1 n)))
-        ";
-        let expr2 = parse(&arena, code2).unwrap();
-        let _fib = eval(&arena, expr2, env).unwrap();
-
-        // Collect garbage, keeping only env which has our definitions
-        arena.collect(&[env]);
-
-        let used_after_gc = arena.used();
-
-        // Should still be able to call fib after GC
-        assert_eq!(eval_str(&arena, "(fib 15)", env).unwrap(), 610);
-
-        // Memory usage should be reasonable
-        assert!(used_after_gc < 500);
-    }
-
-    #[test]
-    fn test_cons_car_cdr() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        // Test cons
-        let code = "(define lst (cons 1 (cons 2 (cons 3 nil))))";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        // Test car
-        assert_eq!(eval_str(&arena, "(car lst)", env).unwrap(), 1);
-
-        // Test cdr and nested car
-        let code2 = "(car (cdr lst))";
-        assert_eq!(eval_str(&arena, code2, env).unwrap(), 2);
-
-        // Test nested cdr
-        let code3 = "(car (cdr (cdr lst)))";
-        assert_eq!(eval_str(&arena, code3, env).unwrap(), 3);
-    }
-
-    #[test]
-    fn test_quote() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        // Quote should return the expression unevaluated
-        let expr = parse(&arena, "'(1 2 3)").unwrap();
-        let result = eval(&arena, expr, env).unwrap();
-
-        // Result should be a list
-        match arena.get(result) {
-            Ok(LispValue::Cons(_, _)) => {} // Success
-            _ => panic!("Quote should return a list"),
-        }
-    }
-
-    #[test]
-    fn test_boolean_operations() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        assert_eq!(eval_str(&arena, "(if #t 1 2)", env).unwrap(), 1);
-        assert_eq!(eval_str(&arena, "(if #f 1 2)", env).unwrap(), 2);
-        assert_eq!(eval_str(&arena, "(if (< 3 5) 1 2)", env).unwrap(), 1);
-        assert_eq!(eval_str(&arena, "(if (< 5 3) 1 2)", env).unwrap(), 2);
-    }
-
-    #[test]
-    fn test_comparison_operators() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        assert_eq!(eval_str(&arena, "(if (< 3 5) 1 0)", env).unwrap(), 1);
-        assert_eq!(eval_str(&arena, "(if (< 5 3) 1 0)", env).unwrap(), 0);
-        assert_eq!(eval_str(&arena, "(if (= 5 5) 1 0)", env).unwrap(), 1);
-        assert_eq!(eval_str(&arena, "(if (= 5 3) 1 0)", env).unwrap(), 0);
-    }
-
-    #[test]
-    fn test_nested_lambdas() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "
-            (define make-adder
-              (lambda (x)
-                (lambda (y) (+ x y))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let code2 = "(define add5 (make-adder 5))";
-        let expr2 = parse(&arena, code2).unwrap();
-        let _ = eval(&arena, expr2, env).unwrap();
-
-        assert_eq!(eval_str(&arena, "(add5 10)", env).unwrap(), 15);
-        assert_eq!(eval_str(&arena, "(add5 3)", env).unwrap(), 8);
-    }
-
-    #[test]
-    fn test_higher_order_functions() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "
-            (define apply-twice
-              (lambda (f x)
-                (f (f x))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let code2 = "(define double (lambda (x) (* x 2)))";
-        let expr2 = parse(&arena, code2).unwrap();
-        let _ = eval(&arena, expr2, env).unwrap();
-
-        assert_eq!(eval_str(&arena, "(apply-twice double 3)", env).unwrap(), 12);
-    }
-
-    #[test]
-    fn test_multiple_definitions() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let expr = parse(&arena, "(define x 10)").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let expr = parse(&arena, "(define y 20)").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let expr = parse(&arena, "(define z (+ x y))").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        assert_eq!(eval_str(&arena, "z", env).unwrap(), 30);
-    }
-
-    #[test]
-    fn test_gc_preserves_live_data() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        // Create some values
-        let expr = parse(&arena, "(define x 42)").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let expr = parse(&arena, "(define y 100)").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        // Do GC
-        arena.collect(&[env]);
-
-        // Values should still be accessible
-        assert_eq!(eval_str(&arena, "x", env).unwrap(), 42);
-        assert_eq!(eval_str(&arena, "y", env).unwrap(), 100);
-        assert_eq!(eval_str(&arena, "(+ x y)", env).unwrap(), 142);
-    }
-    #[test]
-    fn test_gc_reclaims_unreachable_cells() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        // Allocate some temporary values
-        for i in 0..50 {
-            let expr = parse(&arena, &format!("(+ {} 1)", i)).unwrap();
-            let _ = eval(&arena, expr, env).unwrap();
-        }
-
-        let used_before = arena.used();
-        arena.collect(&[env]);
-        let used_after = arena.used();
-
-        // Should have freed most temporary allocations
-        assert!(used_after < used_before);
-        assert!(used_after < 300); // Env and builtins should be small
-    }
-
-    #[test]
-    fn test_gc_preserves_environment() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        // Define variables
-        let expr = parse(&arena, "(define x 42)").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-        let expr = parse(&arena, "(define y 100)").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        arena.collect(&[env]);
-
-        // Variables should still be accessible
-        assert_eq!(eval_str(&arena, "x", env).unwrap(), 42);
-        assert_eq!(eval_str(&arena, "y", env).unwrap(), 100);
-    }
-
-    #[test]
-    fn test_gc_preserves_lambda_closures() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "(define make-counter (lambda (n) (lambda () n)))";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let expr = parse(&arena, "(define counter (make-counter 42))").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        arena.collect(&[env]);
-
-        assert_eq!(eval_str(&arena, "(counter)", env).unwrap(), 42);
-    }
-
-    #[test]
-    fn test_gc_with_deeply_nested_lists() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        // Create deeply nested list
-        let code = "(define deep (cons 1 (cons 2 (cons 3 (cons 4 (cons 5 nil))))))";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        arena.collect(&[env]);
-
-        // Should still be able to access nested elements
-        assert_eq!(eval_str(&arena, "(car deep)", env).unwrap(), 1);
-        assert_eq!(eval_str(&arena, "(car (cdr deep))", env).unwrap(), 2);
-        assert_eq!(eval_str(&arena, "(car (cdr (cdr deep)))", env).unwrap(), 3);
-    }
-
-    #[test]
-    fn test_gc_multiple_roots() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let expr1 = parse(&arena, "(cons 1 2)").unwrap();
-        let val1 = eval(&arena, expr1, env).unwrap();
-
-        let expr2 = parse(&arena, "(cons 3 4)").unwrap();
-        let val2 = eval(&arena, expr2, env).unwrap();
-
-        // Collect with multiple roots
-        arena.collect(&[env, val1, val2]);
-
-        // Both values should still be accessible
-        assert!(arena.get(val1).is_ok());
-        assert!(arena.get(val2).is_ok());
-    }
-
-    // ============================================================================
-    // Auto-GC Tests
-    // ============================================================================
-
-    #[test]
-    fn test_auto_gc_triggers_on_oom() {
-        let arena: Arena<512, 256> = Arena::new(); // Small arena
-        let env = init_env(&arena).unwrap();
-
-        // Fill arena with temporary allocations
-        for i in 0..100 {
-            let code = format!("(+ {} {})", i, i + 1);
-            let _ = eval_str(&arena, &code, env);
-        }
-
-        // Should still work due to auto-GC
-        assert_eq!(eval_str(&arena, "(+ 1 2)", env).unwrap(), 3);
-    }
-
-    #[test]
-    fn test_auto_gc_with_recursive_function() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "
-            (define sum-to
-              (lambda (n acc)
+                    (ack (- m 1) 1)
+                    (ack (- m 1) (ack m (- n 1)))))))
+        (ack 3 3)
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("61".to_string()));
+}
+
+#[test]
+fn test_ackermann_small() {
+    let program = r#"
+        (define ack
+          (lambda (m n)
+            (if (= m 0)
+                (+ n 1)
                 (if (= n 0)
-                    acc
-                    (sum-to (- n 1) (+ acc n)))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        // This will create many temporary allocations
-        // Auto-GC should keep memory under control
-        assert_eq!(eval_str(&arena, "(sum-to 30 0)", env).unwrap(), 465);
-    }
-
-    #[test]
-    fn test_push_pop_roots_maintains_gc_correctness() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        arena.push_root(env);
-
-        let expr = parse(&arena, "(define x 42)").unwrap();
-        arena.push_root(expr);
-        let result = eval(&arena, expr, env).unwrap();
-        arena.pop_root();
-
-        arena.collect(&[env]);
-
-        assert_eq!(eval_str(&arena, "x", env).unwrap(), 42);
-        arena.pop_root();
-    }
-
-    // ============================================================================
-    // Lambda and Closure GC Tests
-    // ============================================================================
-
-    #[test]
-    fn test_gc_lambda_captures_environment() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "
-            (define make-adder
-              (lambda (x)
-                (lambda (y) (+ x y))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let expr = parse(&arena, "(define add10 (make-adder 10))").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        // Create garbage
-        for i in 0..50 {
-            let code = format!("(+ {} 1)", i);
-            let _ = eval_str(&arena, &code, env);
-        }
-
-        arena.collect(&[env]);
-
-        // Closure should still work
-        assert_eq!(eval_str(&arena, "(add10 5)", env).unwrap(), 15);
-    }
-
-    #[test]
-    fn test_gc_multiple_closures() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "
-            (define make-multiplier
-              (lambda (n)
-                (lambda (x) (* x n))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let expr = parse(&arena, "(define times2 (make-multiplier 2))").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let expr = parse(&arena, "(define times3 (make-multiplier 3))").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        arena.collect(&[env]);
-
-        assert_eq!(eval_str(&arena, "(times2 5)", env).unwrap(), 10);
-        assert_eq!(eval_str(&arena, "(times3 5)", env).unwrap(), 15);
-    }
-
-    #[test]
-    fn test_gc_nested_lambda_environments() {
-        let arena: Arena<3072, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "
-            (define make-counter
-              (lambda (start)
-                (lambda (inc)
-                  (lambda ()
-                    (+ start inc)))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let expr = parse(&arena, "(define counter ((make-counter 10) 5))").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        arena.collect(&[env]);
-
-        assert_eq!(eval_str(&arena, "(counter)", env).unwrap(), 15);
-    }
-
-    #[test]
-    fn test_gc_lambda_with_list_capture() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "
-            (define make-list-accessor
-              (lambda (lst)
-                (lambda () (car lst))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let expr = parse(
-            &arena,
-            "(define get-first (make-list-accessor (cons 42 nil)))",
-        )
-        .unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        arena.collect(&[env]);
-
-        assert_eq!(eval_str(&arena, "(get-first)", env).unwrap(), 42);
-    }
-
-    // ============================================================================
-    // Recursive Function GC Tests
-    // ============================================================================
-
-    #[test]
-    fn test_gc_during_factorial() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "
-            (define fact
-              (lambda (n)
-                (if (= n 0)
-                    1
-                    (* n (fact (- n 1))))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        // Force multiple GCs during execution
-        for _ in 0..5 {
-            assert_eq!(eval_str(&arena, "(fact 6)", env).unwrap(), 720);
-        }
-
-        arena.collect(&[env]);
-        assert_eq!(eval_str(&arena, "(fact 5)", env).unwrap(), 120);
-    }
-
-    #[test]
-    fn test_gc_tail_recursive_sum() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "
-            (define sum-iter
-              (lambda (n acc)
-                (if (= n 0)
-                    acc
-                    (sum-iter (- n 1) (+ acc n)))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        // Should handle large recursion with GC
-        assert_eq!(eval_str(&arena, "(sum-iter 100 0)", env).unwrap(), 5050);
-
-        arena.collect(&[env]);
-        assert_eq!(eval_str(&arena, "(sum-iter 50 0)", env).unwrap(), 1275);
-    }
-
-    #[test]
-    fn test_gc_mutual_recursion() {
-        let arena: Arena<3072, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "
-            (define is-even
-              (lambda (n)
-                (if (= n 0)
-                    #t
-                    (is-odd (- n 1)))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let code = "
-            (define is-odd
-              (lambda (n)
-                (if (= n 0)
-                    #f
-                    (is-even (- n 1)))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        arena.collect(&[env]);
-
-        assert_eq!(eval_str(&arena, "(if (is-even 4) 1 0)", env).unwrap(), 1);
-        assert_eq!(eval_str(&arena, "(if (is-odd 4) 1 0)", env).unwrap(), 0);
-    }
-
-    // ============================================================================
-    // List Structure GC Tests
-    // ============================================================================
-
-    #[test]
-    fn test_gc_preserves_cons_chains() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "(define lst (cons 1 (cons 2 (cons 3 (cons 4 (cons 5 nil))))))";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        // Create garbage
-        for i in 0..100 {
-            let _ = arena.alloc(LispValue::Number(i));
-        }
-
-        arena.collect(&[env]);
-
-        // All list elements should be preserved
-        assert_eq!(eval_str(&arena, "(car lst)", env).unwrap(), 1);
-        assert_eq!(
-            eval_str(&arena, "(car (cdr (cdr (cdr (cdr lst)))))", env).unwrap(),
-            5
-        );
-    }
-
-    #[test]
-    fn test_gc_circular_reference_prevention() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        // Create a simple list
-        let code = "(define x (cons 1 (cons 2 nil)))";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        // GC should handle this without infinite loop
-        arena.collect(&[env]);
-
-        assert_eq!(eval_str(&arena, "(car x)", env).unwrap(), 1);
-    }
-
-    #[test]
-    fn test_gc_shared_substructures() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "(define tail (cons 3 (cons 4 nil)))";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let code = "(define lst1 (cons 1 tail))";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let code = "(define lst2 (cons 2 tail))";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        arena.collect(&[env]);
-
-        // Both lists should share tail and work correctly
-        assert_eq!(eval_str(&arena, "(car lst1)", env).unwrap(), 1);
-        assert_eq!(eval_str(&arena, "(car lst2)", env).unwrap(), 2);
-        assert_eq!(eval_str(&arena, "(car (cdr lst1))", env).unwrap(), 3);
-        assert_eq!(eval_str(&arena, "(car (cdr lst2))", env).unwrap(), 3);
-    }
-
-    #[test]
-    fn test_gc_deeply_nested_cons() {
-        let arena: Arena<4096, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        // Build deeply nested structure
-        let mut code = String::from("(define deep ");
-        for _ in 0..50 {
-            code.push_str("(cons 1 ");
-        }
-        code.push_str("nil");
-        for _ in 0..50 {
-            code.push(')');
-        }
-        code.push(')');
-
-        let expr = parse(&arena, &code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        arena.collect(&[env]);
-
-        assert_eq!(eval_str(&arena, "(car deep)", env).unwrap(), 1);
-    }
-
-    // ============================================================================
-    // Stress Tests
-    // ============================================================================
-
-    #[test]
-    fn test_gc_repeated_allocation_deallocation() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        for round in 0..10 {
-            // Allocate many temps
-            for i in 0..50 {
-                let code = format!("(+ {} {})", i, round);
-                let _ = eval_str(&arena, &code, env);
-            }
-
-            // Force GC
-            arena.collect(&[env]);
-
-            // Should still work
-            assert_eq!(eval_str(&arena, "(+ 1 2)", env).unwrap(), 3);
-        }
-    }
-
-    #[test]
-    fn test_gc_alternating_define_and_gc() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        for i in 0..20 {
-            let code = format!("(define x{} {})", i, i * 10);
-            let expr = parse(&arena, &code).unwrap();
-            let _ = eval(&arena, expr, env).unwrap();
-
-            if i % 3 == 0 {
-                arena.collect(&[env]);
-            }
-        }
-
-        // All definitions should be preserved
-        assert_eq!(eval_str(&arena, "x0", env).unwrap(), 0);
-        assert_eq!(eval_str(&arena, "x10", env).unwrap(), 100);
-        assert_eq!(eval_str(&arena, "x19", env).unwrap(), 190);
-    }
-
-    #[test]
-    fn test_gc_large_computation() {
-        let arena: Arena<4096, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "
-            (define compute
-              (lambda (n)
-                (if (= n 0)
-                    0
-                    (+ n (compute (- n 1))))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        // Should handle with auto-GC
-        assert_eq!(eval_str(&arena, "(compute 100)", env).unwrap(), 5050);
-
-        arena.collect(&[env]);
-
-        // Should still work after explicit GC
-        assert_eq!(eval_str(&arena, "(compute 50)", env).unwrap(), 1275);
-    }
-
-    #[test]
-    fn test_gc_many_small_allocations() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        // Allocate many small numbers
-        for i in 0..500 {
-            let _ = arena.alloc(LispValue::Number(i));
-        }
-
-        let used_before = arena.used();
-        arena.collect(&[env]);
-        let used_after = arena.used();
-
-        // Most should be collected
-        assert!(used_after < used_before / 2);
-    }
-
-    #[test]
-    fn test_gc_mixed_types() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let expr = parse(&arena, "(define x 42)").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let expr = parse(&arena, "(define y #t)").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let expr = parse(&arena, "(define z (cons 1 2))").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        let expr = parse(&arena, "(define f (lambda (n) (* n 2)))").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        arena.collect(&[env]);
-
-        // All types should be preserved
-        assert_eq!(eval_str(&arena, "x", env).unwrap(), 42);
-        assert_eq!(eval_str(&arena, "(if y 1 0)", env).unwrap(), 1);
-        assert_eq!(eval_str(&arena, "(car z)", env).unwrap(), 1);
-        assert_eq!(eval_str(&arena, "(f 10)", env).unwrap(), 20);
-    }
-
-    // ============================================================================
-    // Edge Cases
-    // ============================================================================
-
-    #[test]
-    fn test_gc_empty_environment() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = env_new(&arena).unwrap();
-
-        // Create and collect garbage
-        for i in 0..100 {
-            let _ = arena.alloc(LispValue::Number(i));
-        }
-
-        arena.collect(&[env]);
-
-        // Should not crash
-        assert!(arena.used() < 100);
-    }
-
-    #[test]
-    fn test_gc_nil_preservation() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let expr = parse(&arena, "(define x nil)").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        arena.collect(&[env]);
-
-        // Nil should work after GC
-        let expr = parse(&arena, "x").unwrap();
-        let result = eval(&arena, expr, env).unwrap();
-        assert!(matches!(arena.get(result), Ok(LispValue::Nil)));
-    }
-
-    #[test]
-    fn test_gc_with_no_roots() {
-        let arena: Arena<1024, 256> = Arena::new();
-
-        // Allocate without roots
-        for i in 0..100 {
-            let _ = arena.alloc(LispValue::Number(i));
-        }
-
-        let used_before = arena.used();
-        arena.collect(&[]);
-        let used_after = arena.used();
-
-        // Everything should be collected
-        assert_eq!(used_after, 0);
-        assert!(used_before > 0);
-    }
-
-    #[test]
-    fn test_gc_single_root() {
-        let arena: Arena<1024, 256> = Arena::new();
-
-        let root = arena.alloc(LispValue::Number(42)).unwrap();
-
-        // Create garbage
-        for i in 0..100 {
-            let _ = arena.alloc(LispValue::Number(i));
-        }
-
-        arena.collect(&[root]);
-
-        // Root should be preserved
-        assert!(matches!(arena.get(root), Ok(LispValue::Number(42))));
-    }
-
-    #[test]
-    fn test_gc_preserves_builtin_functions() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        // Create garbage
-        for i in 0..100 {
-            let _ = arena.alloc(LispValue::Number(i));
-        }
-
-        arena.collect(&[env]);
-
-        // All builtins should still work
-        assert_eq!(eval_str(&arena, "(+ 1 2)", env).unwrap(), 3);
-        assert_eq!(eval_str(&arena, "(- 5 3)", env).unwrap(), 2);
-        assert_eq!(eval_str(&arena, "(* 4 5)", env).unwrap(), 20);
-        assert_eq!(eval_str(&arena, "(car (cons 1 2))", env).unwrap(), 1);
-    }
-
-    // ============================================================================
-    // Memory Exhaustion Tests
-    // ============================================================================
-
-    #[test]
-    fn test_gc_prevents_oom_in_loop() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        let code = "
-            (define loop
-              (lambda (n)
-                (if (= n 0)
-                    0
-                    (loop (- n 1)))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
-
-        // Should complete without OOM due to auto-GC and TCO
-        assert_eq!(eval_str(&arena, "(loop 100)", env).unwrap(), 0);
-    }
-
-    #[test]
-    fn test_gc_recovers_from_near_oom() {
-        let arena: Arena<512, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
-
-        // Fill arena almost completely
-        for i in 0..100 {
-            let _ = arena.alloc(LispValue::Number(i));
-        }
-
-        // This should trigger GC and succeed
-        let result = eval_str(&arena, "(+ 1 2)", env);
+                    (ack (- m 1) 1)
+                    (ack (- m 1) (ack m (- n 1)))))))
+        (ack 2 2)
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("7".to_string()));
+}
+
+#[test]
+fn test_sum_list() {
+    let program = r#"
+        (define sum
+          (lambda (lst)
+            (if (null? lst)
+                0
+                (+ (car lst) (sum (cdr lst))))))
+        (sum (list 1 2 3 4 5))
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("15".to_string()));
+}
+
+#[test]
+fn test_map_function() {
+    let program = r#"
+        (define map
+          (lambda (f lst)
+            (if (null? lst)
+                nil
+                (cons (f (car lst)) (map f (cdr lst))))))
+        (define double (lambda (x) (* x 2)))
+        (map double (list 1 2 3))
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("(2 4 6)".to_string()));
+}
+
+#[test]
+fn test_filter_function() {
+    let program = r#"
+        (define filter
+          (lambda (pred lst)
+            (if (null? lst)
+                nil
+                (if (pred (car lst))
+                    (cons (car lst) (filter pred (cdr lst)))
+                    (filter pred (cdr lst))))))
+        (define positive? (lambda (x) (> x 0)))
+        (filter positive? (list -1 2 -3 4 5))
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("(2 4 5)".to_string()));
+}
+
+// ============================================================================
+// Tail Call Optimization Tests
+// ============================================================================
+
+#[test]
+fn test_tail_recursive_sum() {
+    let program = r#"
+        (define sum-tail
+          (lambda (n acc)
+            (if (= n 0)
+                acc
+                (sum-tail (- n 1) (+ acc n)))))
+        (sum-tail 1000 0)
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("500500".to_string()));
+}
+
+#[test]
+fn test_tail_recursive_factorial() {
+    let program = r#"
+        (define fact-tail
+          (lambda (n acc)
+            (if (= n 0)
+                acc
+                (fact-tail (- n 1) (* acc n)))))
+        (fact-tail 10 1)
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("3628800".to_string()));
+}
+
+// ============================================================================
+// Cyclic Reference Tests
+// ============================================================================
+
+#[test]
+fn test_self_referential_list() {
+    // Test that we can create and handle structures that reference themselves
+    // Without proper handling, this could cause infinite loops
+    let program = r#"
+        (define make-cyclic
+          (lambda (x)
+            (cons x x)))
+        (define cyc (make-cyclic 5))
+        (car cyc)
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("5".to_string()));
+}
+
+#[test]
+fn test_mutual_recursion() {
+    // Tests functions that call each other
+    let program = r#"
+        (define is-even
+          (lambda (n)
+            (if (= n 0)
+                #t
+                (is-odd (- n 1)))))
+        (define is-odd
+          (lambda (n)
+            (if (= n 0)
+                #f
+                (is-even (- n 1)))))
+        (is-even 10)
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("#t".to_string()));
+}
+
+#[test]
+fn test_mutual_recursion_odd() {
+    let program = r#"
+        (define is-even
+          (lambda (n)
+            (if (= n 0)
+                #t
+                (is-odd (- n 1)))))
+        (define is-odd
+          (lambda (n)
+            (if (= n 0)
+                #f
+                (is-even (- n 1)))))
+        (is-odd 7)
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("#t".to_string()));
+}
+
+// ============================================================================
+// Memory Leak Detection Tests
+// ============================================================================
+
+#[test]
+fn test_no_memory_leak_simple_recursion() {
+    // Test that recursive functions don't leak memory beyond expected references
+    use alloc::rc::Rc;
+
+    let program = r#"
+        (define countdown
+          (lambda (n)
+            (if (= n 0)
+                0
+                (countdown (- n 1)))))
+        (countdown 100)
+    "#;
+
+    let env = EnvRef::new();
+    let initial_count = Rc::strong_count(&env.0);
+    let result = eval_str_multiple(program, &env);
+    assert!(result.is_ok());
+
+    let final_count = Rc::strong_count(&env.0);
+
+    // The environment will have references from lambdas that capture it
+    // What matters is that the count is stable (not growing unboundedly)
+    // Expected: 1 (our ref) + 1 (countdown lambda captures env) = 2
+    assert!(
+        final_count <= initial_count + 1,
+        "Environment references growing: initial={}, final={}",
+        initial_count,
+        final_count
+    );
+}
+
+#[test]
+fn test_no_memory_leak_lambda_closure() {
+    // Test that lambda closures don't create unbounded reference growth
+    use alloc::rc::Rc;
+
+    let program = r#"
+        (define make-counter
+          (lambda (n)
+            (lambda () n)))
+        (define counter (make-counter 10))
+        (counter)
+    "#;
+
+    let env = EnvRef::new();
+    let initial_count = Rc::strong_count(&env.0);
+    let result = eval_str_multiple(program, &env);
+    assert!(result.is_ok());
+
+    let final_count = Rc::strong_count(&env.0);
+
+    // Expected: initial + 2 lambdas that capture the env
+    assert!(
+        final_count <= initial_count + 2,
+        "Lambda closures growing unbounded: initial={}, final={}",
+        initial_count,
+        final_count
+    );
+}
+
+#[test]
+fn test_no_memory_leak_nested_lambdas() {
+    // Test deeply nested lambda creation and evaluation
+    use alloc::rc::Rc;
+
+    let program = r#"
+        (define nest
+          (lambda (n)
+            (if (= n 0)
+                (lambda (x) x)
+                (lambda (x) ((nest (- n 1)) x)))))
+        ((nest 50) 42)
+    "#;
+
+    let env = EnvRef::new();
+    let initial_count = Rc::strong_count(&env.0);
+    let result = eval_str_multiple(program, &env);
+    assert!(result.is_ok());
+
+    let final_count = Rc::strong_count(&env.0);
+
+    // The 'nest' lambda captures env, so we expect a small stable increase
+    assert!(
+        final_count <= initial_count + 1,
+        "Nested lambdas growing unbounded: initial={}, final={}",
+        initial_count,
+        final_count
+    );
+}
+
+#[test]
+fn test_no_memory_leak_list_operations() {
+    // Test that list building and destruction doesn't leak
+    use alloc::rc::Rc;
+
+    let program = r#"
+        (define build-list
+          (lambda (n)
+            (if (= n 0)
+                nil
+                (cons n (build-list (- n 1))))))
+        (define my-list (build-list 100))
+        (length my-list)
+    "#;
+
+    let env = EnvRef::new();
+    let initial_count = Rc::strong_count(&env.0);
+    let result = eval_str_multiple(program, &env);
+    assert!(result.is_ok());
+
+    let final_count = Rc::strong_count(&env.0);
+
+    // build-list lambda captures env
+    assert!(
+        final_count <= initial_count + 1,
+        "List operations growing unbounded: initial={}, final={}",
+        initial_count,
+        final_count
+    );
+}
+
+#[test]
+fn test_no_memory_leak_multiple_evaluations() {
+    // Test that multiple evaluations in the same environment don't accumulate references
+    use alloc::rc::Rc;
+
+    let env = EnvRef::new();
+    let initial_count = Rc::strong_count(&env.0);
+
+    // Run multiple evaluations
+    for i in 0..10 {
+        let program = format!("(+ {} {})", i, i + 1);
+        let result = eval_str(&program, &env);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 3);
     }
 
-    #[test]
-    fn test_gc_handles_fragmentation() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+    let final_count = Rc::strong_count(&env.0);
+    // These simple evaluations shouldn't increase the count at all
+    assert_eq!(
+        final_count, initial_count,
+        "Multiple evaluations leaked references: initial={}, final={}",
+        initial_count, final_count
+    );
+}
 
-        // Create many small objects
-        for _ in 0..10 {
-            for i in 0..50 {
-                let _ = arena.alloc(LispValue::Number(i));
-            }
-            arena.collect(&[env]);
-        }
+#[test]
+fn test_no_unbounded_growth() {
+    // Critical test: ensure repeated operations don't grow memory unboundedly
+    use alloc::rc::Rc;
 
-        // Should still be able to allocate
-        assert_eq!(eval_str(&arena, "(+ 1 2)", env).unwrap(), 3);
+    let env = EnvRef::new();
+
+    // Define a recursive function
+    eval_str(
+        "(define countdown (lambda (n) (if (= n 0) 0 (countdown (- n 1)))))",
+        &env,
+    )
+    .unwrap();
+    let count_after_define = Rc::strong_count(&env.0);
+
+    // Run it multiple times - the count should stabilize
+    eval_str("(countdown 100)", &env).unwrap();
+    let count_after_first = Rc::strong_count(&env.0);
+
+    eval_str("(countdown 100)", &env).unwrap();
+    let count_after_second = Rc::strong_count(&env.0);
+
+    eval_str("(countdown 100)", &env).unwrap();
+    let count_after_third = Rc::strong_count(&env.0);
+
+    // The count should stabilize after first eval (not grow with each call)
+    assert_eq!(
+        count_after_first, count_after_second,
+        "Reference count growing between calls: {} vs {}",
+        count_after_first, count_after_second
+    );
+    assert_eq!(
+        count_after_second, count_after_third,
+        "Reference count growing between calls: {} vs {}",
+        count_after_second, count_after_third
+    );
+}
+
+#[test]
+fn test_temporary_values_cleaned_up() {
+    // Test that temporary values created during evaluation are cleaned up
+    use alloc::rc::Rc;
+
+    let env = EnvRef::new();
+    let initial_count = Rc::strong_count(&env.0);
+
+    // Create and immediately discard large temporary structures
+    let program = r#"
+        (length (append 
+                  (list 1 2 3 4 5)
+                  (list 6 7 8 9 10)
+                  (list 11 12 13 14 15)))
+    "#;
+
+    let result = eval_str(program, &env);
+    assert_eq!(
+        result.map(|s| {
+            let mut buf = [0u8; 256];
+            s.to_str_buf(&mut buf).unwrap().to_string()
+        }),
+        Ok("15".to_string())
+    );
+
+    let final_count = Rc::strong_count(&env.0);
+
+    // No persistent references should remain from temporary values
+    assert_eq!(
+        final_count, initial_count,
+        "Temporary values not cleaned up: initial={}, final={}",
+        initial_count, final_count
+    );
+}
+
+#[test]
+fn test_valref_cleanup() {
+    // Test that ValRef properly cleans up when dropped
+    use alloc::rc::Rc;
+
+    {
+        let val = ValRef::number(42);
+        let rc_count = Rc::strong_count(&val.0);
+        assert_eq!(rc_count, 1);
+
+        // Clone it a few times
+        let val2 = val.clone();
+        let val3 = val.clone();
+        let rc_count = Rc::strong_count(&val.0);
+        assert_eq!(rc_count, 3);
+
+        drop(val2);
+        let rc_count = Rc::strong_count(&val.0);
+        assert_eq!(rc_count, 2);
+
+        drop(val3);
+        let rc_count = Rc::strong_count(&val.0);
+        assert_eq!(rc_count, 1);
     }
+    // val is dropped here, all references should be gone
+}
 
-    // ============================================================================
-    // Complex Scenarios
-    // ============================================================================
+#[test]
+fn test_environment_bindings_cleanup() {
+    // Test that environment bindings are properly cleaned up
+    use alloc::rc::Rc;
 
-    #[test]
-    fn test_gc_during_nested_function_calls() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+    let env = EnvRef::new();
 
-        let expr = parse(&arena, "(define f (lambda (x) (* x 2)))").unwrap();
-        arena.push_root(expr);
-        let _ = eval(&arena, expr, env).unwrap();
-        arena.pop_root();
+    // Create some bindings
+    eval_str("(define x 10)", &env).unwrap();
+    eval_str("(define y 20)", &env).unwrap();
+    eval_str("(define z (+ x y))", &env).unwrap();
 
-        let expr = parse(&arena, "(define g (lambda (x) (+ x 1)))").unwrap();
-        arena.push_root(expr);
-        let _ = eval(&arena, expr, env).unwrap();
-        arena.pop_root();
+    let strong_count = Rc::strong_count(&env.0);
+    assert_eq!(
+        strong_count, 1,
+        "Environment bindings leaked references: {}",
+        strong_count
+    );
+}
 
-        let expr = parse(&arena, "(define h (lambda (x) (- x 1)))").unwrap();
-        arena.push_root(expr);
-        let _ = eval(&arena, expr, env).unwrap();
-        arena.pop_root();
+#[test]
+fn test_no_leak_with_errors() {
+    // Test that errors during evaluation don't leak memory
+    use alloc::rc::Rc;
 
-        arena.collect(&[env]);
+    let env = EnvRef::new();
 
-        // Nested calls should work: h(10)=9, g(9)=10, f(10)=20
-        assert_eq!(eval_str(&arena, "(f (g (h 10)))", env).unwrap(), 20);
-    }
-    #[test]
-    fn test_gc_preserves_multiple_lambda_definitions() {
-        let arena: Arena<3072, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+    // Try some operations that will fail
+    let _ = eval_str("(/ 10 0)", &env); // Division by zero
+    let _ = eval_str("undefined-var", &env); // Unbound symbol
+    let _ = eval_str("(+ 1 #t)", &env); // Type error
 
-        // Define multiple lambdas
-        for i in 0..10 {
-            let code = format!("(define f{} (lambda (x) (+ x {})))", i, i * 10);
-            let expr = parse(&arena, &code).unwrap();
-            let _ = eval(&arena, expr, env).unwrap();
-        }
+    let strong_count = Rc::strong_count(&env.0);
+    assert_eq!(
+        strong_count, 1,
+        "Error handling leaked references: {}",
+        strong_count
+    );
+}
 
-        arena.collect(&[env]);
+// ============================================================================
+// Error Handling Tests
+// ============================================================================
 
-        // All should work
-        assert_eq!(eval_str(&arena, "(f0 5)", env).unwrap(), 5);
-        assert_eq!(eval_str(&arena, "(f5 5)", env).unwrap(), 55);
-        assert_eq!(eval_str(&arena, "(f9 5)", env).unwrap(), 95);
-    }
+#[test]
+fn test_unbound_symbol() {
+    assert!(eval_test("undefined-var").is_err());
+}
 
-    #[test]
-    fn test_gc_with_list_manipulation() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+#[test]
+fn test_invalid_function_call() {
+    assert!(eval_test("(5 10)").is_err());
+}
 
-        let code = "
-            (define build-list
-              (lambda (n)
-                (if (= n 0)
-                    nil
-                    (cons n (build-list (- n 1))))))
-        ";
-        let expr = parse(&arena, code).unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
+#[test]
+fn test_arity_mismatch() {
+    assert!(eval_test("((lambda (x) x) 1 2)").is_err());
+}
 
-        let expr = parse(&arena, "(define mylist (build-list 10))").unwrap();
-        let _ = eval(&arena, expr, env).unwrap();
+#[test]
+fn test_type_error_arithmetic() {
+    assert!(eval_test("(+ 1 #t)").is_err());
+}
 
-        arena.collect(&[env]);
+#[test]
+fn test_division_by_zero() {
+    assert!(eval_test("(/ 10 0)").is_err());
+}
 
-        assert_eq!(eval_str(&arena, "(car mylist)", env).unwrap(), 10);
-        assert_eq!(eval_str(&arena, "(car (cdr mylist))", env).unwrap(), 9);
-    }
+// ============================================================================
+// Complex Expression Tests
+// ============================================================================
 
-    #[test]
-    fn test_gc_doesnt_collect_intermediate_results() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+#[test]
+fn test_nested_list_operations() {
+    assert_eq!(eval_test("(car (cdr (list 1 2 3)))"), Ok("2".to_string()));
+    assert_eq!(
+        eval_test("(length (append (list 1 2) (list 3 4)))"),
+        Ok("4".to_string())
+    );
+}
 
-        // Complex expression that creates many intermediates
-        let code = "(+ (* 2 3) (* 4 5) (* 6 7))";
-        assert_eq!(eval_str(&arena, code, env).unwrap(), 68);
+#[test]
+fn test_complex_lambda_expression() {
+    let program = r#"
+        ((lambda (x y z)
+           (+ (* x y) z))
+         2 3 4)
+    "#;
+    assert_eq!(eval_test(program), Ok("10".to_string()));
+}
 
-        arena.collect(&[env]);
+#[test]
+fn test_multiple_definitions() {
+    let program = r#"
+        (define a 10)
+        (define b 20)
+        (define c (+ a b))
+        c
+    "#;
+    assert_eq!(eval_multiple_test(program), Ok("30".to_string()));
+}
 
-        // Should still work
-        assert_eq!(eval_str(&arena, "(+ 1 2)", env).unwrap(), 3);
-    }
+// ============================================================================
+// Edge Cases
+// ============================================================================
 
-    #[test]
-    fn test_gc_mark_phase_completeness() {
-        let arena: Arena<2048, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+#[test]
+fn test_empty_list() {
+    assert_eq!(eval_test("(list)"), Ok("nil".to_string()));
+}
 
-        // Create interconnected structures
-        let code = "
-            (define a (cons 1 nil))
-            (define b (cons 2 a))
-            (define c (cons 3 b))
-        ";
+#[test]
+fn test_single_element_list() {
+    assert_eq!(eval_test("(list 42)"), Ok("(42)".to_string()));
+}
 
-        for line in code.lines() {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() {
-                let expr = parse(&arena, trimmed).unwrap();
-                let _ = eval(&arena, expr, env).unwrap();
-            }
-        }
+#[test]
+fn test_nested_empty_lists() {
+    assert_eq!(
+        eval_test("(list (list) (list))"),
+        Ok("(nil nil)".to_string())
+    );
+}
 
-        arena.collect(&[env]);
+#[test]
+fn test_zero_arithmetic() {
+    assert_eq!(eval_test("(+ 0)"), Ok("0".to_string()));
+    assert_eq!(eval_test("(* 0)"), Ok("0".to_string()));
+    assert_eq!(eval_test("(- 0)"), Ok("0".to_string()));
+}
 
-        // All should be reachable
-        assert_eq!(eval_str(&arena, "(car c)", env).unwrap(), 3);
-        assert_eq!(eval_str(&arena, "(car (cdr c))", env).unwrap(), 2);
-        assert_eq!(eval_str(&arena, "(car (cdr (cdr c)))", env).unwrap(), 1);
-    }
+// ============================================================================
+// Parser Tests
+// ============================================================================
 
-    #[test]
-    fn test_gc_sweep_phase_reclaims_all_garbage() {
-        let arena: Arena<1024, 256> = Arena::new();
-        let env = init_env(&arena).unwrap();
+#[test]
+fn test_parse_comments() {
+    let program = r#"
+        ; This is a comment
+        (+ 1 2) ; inline comment
+        ; another comment
+    "#;
+    assert_eq!(eval_test(program), Ok("3".to_string()));
+}
 
-        // Allocate and orphan many objects
-        for i in 0..200 {
-            let _ = arena.alloc(LispValue::Number(i));
-        }
+#[test]
+fn test_parse_whitespace() {
+    assert_eq!(eval_test("   (  +   1    2   )   "), Ok("3".to_string()));
+}
 
-        let used_before = arena.used();
-        arena.collect(&[env]);
-        let used_after = arena.used();
-
-        // Should have swept most garbage
-        assert!(used_after < used_before / 3);
-    }
+#[test]
+fn test_parse_multiline() {
+    let program = r#"
+        (+
+         1
+         2
+         3)
+    "#;
+    assert_eq!(eval_test(program), Ok("6".to_string()));
 }
