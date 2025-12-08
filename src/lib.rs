@@ -1,7 +1,7 @@
 #![no_std]
 
 extern crate alloc;
-mod arena;
+//mod arena;
 use alloc::rc::Rc;
 use core::cell::RefCell;
 use core::ops::Deref;
