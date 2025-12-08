@@ -634,16 +634,6 @@ impl Env {
 // Tokenizer
 // ============================================================================
 
-#[derive(Debug, Clone)]
-enum Token {
-    LParen,
-    RParen,
-    Symbol(StrRef),
-    Number(i64),
-    Bool(bool),
-    Quote,
-}
-
 fn parse_i64(s: &str) -> Result<i64, ()> {
     let bytes = s.as_bytes();
     if bytes.is_empty() {
