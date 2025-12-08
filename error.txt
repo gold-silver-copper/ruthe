@@ -1,7 +1,7 @@
 warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:527:19
+   --> src/lib.rs:530:19
     |
-527 |     pub fn borrow(&self) -> core::cell::Ref<Env> {
+530 |     pub fn borrow(&self) -> core::cell::Ref<Env> {
     |                   ^^^^^     ^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
     |                   |
     |                   the lifetime is elided here
@@ -10,13 +10,13 @@ warning: hiding a lifetime that's elided elsewhere is confusing
     = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
 help: use `'_` for type paths
     |
-527 |     pub fn borrow(&self) -> core::cell::Ref<'_, Env> {
+530 |     pub fn borrow(&self) -> core::cell::Ref<'_, Env> {
     |                                             +++
 
 warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:531:23
+   --> src/lib.rs:534:23
     |
-531 |     pub fn borrow_mut(&self) -> core::cell::RefMut<Env> {
+534 |     pub fn borrow_mut(&self) -> core::cell::RefMut<Env> {
     |                       ^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
     |                       |
     |                       the lifetime is elided here
@@ -24,526 +24,19 @@ warning: hiding a lifetime that's elided elsewhere is confusing
     = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
 help: use `'_` for type paths
     |
-531 |     pub fn borrow_mut(&self) -> core::cell::RefMut<'_, Env> {
+534 |     pub fn borrow_mut(&self) -> core::cell::RefMut<'_, Env> {
     |                                                    +++
 
 warning: `ruthe` (lib) generated 2 warnings (run `cargo fix --lib -p ruthe` to apply 2 suggestions)
-warning: unused variable: `count_after_define`
-   --> tests/tests.rs:743:9
-    |
-743 |     let count_after_define = Rc::strong_count(&env.0);
-    |         ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_count_after_define`
-    |
-    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
-
-warning: `ruthe` (test "tests") generated 1 warning (run `cargo fix --test "tests" -p ruthe` to apply 1 suggestion)
-    Finished `release` profile [optimized] target(s) in 0.00s
-     Running tests/tests.rs (target/release/deps/tests-c2e09e891a675fcc)
-
-running 74 tests
-test test_addition ... FAILED
-test test_booleans ... FAILED
-test test_car ... FAILED
-test test_append ... FAILED
-test test_cdr ... FAILED
-test test_arity_mismatch ... ok
-test test_cons_predicate ... FAILED
-test test_cons ... FAILED
-test test_complex_lambda_expression ... FAILED
-test test_ackermann_small ... FAILED
-test test_define ... FAILED
-test test_define_expression ... FAILED
-test test_division ... FAILED
-test test_division_by_zero ... ok
-test test_empty_list ... FAILED
-test test_environment_bindings_cleanup ... ok
-test test_equality ... FAILED
-test test_factorial ... FAILED
-test test_greater_than ... FAILED
-test test_factorial_larger ... FAILED
-test test_if_non_boolean_is_true ... FAILED
-test test_if_false ... FAILED
-test test_if_nil_is_false ... FAILED
-test test_higher_order_function ... FAILED
-test test_if_nested ... FAILED
-test test_filter_function ... FAILED
-test test_fibonacci_small ... FAILED
-test test_if_true ... FAILED
-test test_invalid_function_call ... ok
-test test_lambda_basic ... FAILED
-test test_lambda_closure ... FAILED
-test test_lambda_nested ... FAILED
-test test_lambda_no_args ... FAILED
-test test_length ... FAILED
-test test_less_than ... FAILED
-test test_list ... FAILED
-test test_multiplication ... FAILED
-test test_multiple_definitions ... FAILED
-test test_map_function ... FAILED
-test test_nested_arithmetic ... FAILED
-test test_nested_empty_lists ... FAILED
-test test_nil ... FAILED
-test test_mutual_recursion_odd ... FAILED
-test test_no_memory_leak_lambda_closure ... ok
-test test_no_leak_with_errors ... ok
-test test_mutual_recursion ... FAILED
-test test_nested_list_operations ... FAILED
-test test_no_memory_leak_multiple_evaluations ... ok
-test test_null_predicate ... FAILED
-test test_numbers ... FAILED
-test test_parse_comments ... FAILED
-test test_parse_multiline ... FAILED
-test test_parse_whitespace ... FAILED
-test test_quote ... FAILED
-test test_reverse ... FAILED
-test test_single_element_list ... FAILED
-test test_no_memory_leak_nested_lambdas ... ok
-test test_subtraction ... FAILED
-test test_self_referential_list ... FAILED
-test test_temporary_values_cleaned_up ... FAILED
-test test_type_error_arithmetic ... ok
-test test_tail_recursive_factorial ... FAILED
-test test_unbound_symbol ... ok
-test test_sum_list ... FAILED
-test test_valref_cleanup ... ok
-test test_fibonacci ... FAILED
-test test_zero_arithmetic ... FAILED
-test test_no_memory_leak_simple_recursion ... ok
-test test_no_memory_leak_list_operations ... ok
-test test_no_unbounded_growth ... ok
-test test_countdown ... FAILED
-test test_tail_recursive_sum ... FAILED
-test test_ackermann ... FAILED
-test test_countdown_large ... FAILED
-
-failures:
-
----- test_addition stdout ----
-
-thread 'test_addition' (69136775) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-
----- test_booleans stdout ----
-
-thread 'test_booleans' (69136778) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_car stdout ----
-
-thread 'test_car' (69136779) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_append stdout ----
-
-thread 'test_append' (69136776) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_cdr stdout ----
-
-thread 'test_cdr' (69136780) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_cons_predicate stdout ----
-
-thread 'test_cons_predicate' (69136783) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_cons stdout ----
-
-thread 'test_cons' (69136782) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_complex_lambda_expression stdout ----
-
-thread 'test_complex_lambda_expression' (69136781) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_ackermann_small stdout ----
-
-thread 'test_ackermann_small' (69136774) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_define stdout ----
-
-thread 'test_define' (69136786) panicked at tests/tests.rs:224:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_define_expression stdout ----
-
-thread 'test_define_expression' (69136787) panicked at tests/tests.rs:244:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_division stdout ----
-
-thread 'test_division' (69136788) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_empty_list stdout ----
-
-thread 'test_empty_list' (69136790) panicked at tests/tests.rs:939:5:
-assertion `left == right` failed
-  left: Ok("")
- right: Ok("nil")
-
----- test_equality stdout ----
-
-thread 'test_equality' (69136792) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_factorial stdout ----
-
-thread 'test_factorial' (69136793) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_greater_than stdout ----
-
-thread 'test_greater_than' (69136798) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_factorial_larger stdout ----
-
-thread 'test_factorial_larger' (69136794) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_if_non_boolean_is_true stdout ----
-
-thread 'test_if_non_boolean_is_true' (69136803) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_if_false stdout ----
-
-thread 'test_if_false' (69136800) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_if_nil_is_false stdout ----
-
-thread 'test_if_nil_is_false' (69136802) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_higher_order_function stdout ----
-
-thread 'test_higher_order_function' (69136799) panicked at tests/tests.rs:302:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_if_nested stdout ----
-
-thread 'test_if_nested' (69136801) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_filter_function stdout ----
-
-thread 'test_filter_function' (69136797) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_fibonacci_small stdout ----
-
-thread 'test_fibonacci_small' (69136796) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_if_true stdout ----
-
-thread 'test_if_true' (69136804) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_lambda_basic stdout ----
-
-thread 'test_lambda_basic' (69136806) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_lambda_closure stdout ----
-
-thread 'test_lambda_closure' (69136807) panicked at tests/tests.rs:276:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_lambda_nested stdout ----
-
-thread 'test_lambda_nested' (69136808) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_lambda_no_args stdout ----
-
-thread 'test_lambda_no_args' (69136809) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_length stdout ----
-
-thread 'test_length' (69136810) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_less_than stdout ----
-
-thread 'test_less_than' (69136811) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_list stdout ----
-
-thread 'test_list' (69136812) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_multiplication stdout ----
-
-thread 'test_multiplication' (69136815) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_multiple_definitions stdout ----
-
-thread 'test_multiple_definitions' (69136814) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_map_function stdout ----
-
-thread 'test_map_function' (69136813) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_nested_arithmetic stdout ----
-
-thread 'test_nested_arithmetic' (69136818) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_nested_empty_lists stdout ----
-
-thread 'test_nested_empty_lists' (69136819) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_nil stdout ----
-
-thread 'test_nil' (69136821) panicked at tests/tests.rs:54:5:
-assertion `left == right` failed
-  left: Ok("")
- right: Ok("nil")
-
----- test_mutual_recursion_odd stdout ----
-
-thread 'test_mutual_recursion_odd' (69136817) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_mutual_recursion stdout ----
-
-thread 'test_mutual_recursion' (69136816) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_nested_list_operations stdout ----
-
-thread 'test_nested_list_operations' (69136820) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_null_predicate stdout ----
-
-thread 'test_null_predicate' (69136829) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_numbers stdout ----
-
-thread 'test_numbers' (69136830) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_parse_comments stdout ----
-
-thread 'test_parse_comments' (69136831) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_parse_multiline stdout ----
-
-thread 'test_parse_multiline' (69136832) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_parse_whitespace stdout ----
-
-thread 'test_parse_whitespace' (69136833) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_quote stdout ----
-
-thread 'test_quote' (69136834) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_reverse stdout ----
-
-thread 'test_reverse' (69136835) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_single_element_list stdout ----
-
-thread 'test_single_element_list' (69136837) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_subtraction stdout ----
-
-thread 'test_subtraction' (69136838) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_self_referential_list stdout ----
-
-thread 'test_self_referential_list' (69136836) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_temporary_values_cleaned_up stdout ----
-
-thread 'test_temporary_values_cleaned_up' (69136842) panicked at tests/tests.rs:788:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_tail_recursive_factorial stdout ----
-
-thread 'test_tail_recursive_factorial' (69136840) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_sum_list stdout ----
-
-thread 'test_sum_list' (69136839) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_fibonacci stdout ----
-
-thread 'test_fibonacci' (69136795) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_zero_arithmetic stdout ----
-
-thread 'test_zero_arithmetic' (69136846) panicked at tests/tests.rs:14:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_countdown stdout ----
-
-thread 'test_countdown' (69136784) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_tail_recursive_sum stdout ----
-
-thread 'test_tail_recursive_sum' (69136841) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_ackermann stdout ----
-
-thread 'test_ackermann' (69136773) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_countdown_large stdout ----
-
-thread 'test_countdown_large' (69136785) panicked at tests/tests.rs:27:36:
-called `Result::unwrap()` on an `Err` value: ()
-
-
-failures:
-    test_ackermann
-    test_ackermann_small
-    test_addition
-    test_append
-    test_booleans
-    test_car
-    test_cdr
-    test_complex_lambda_expression
-    test_cons
-    test_cons_predicate
-    test_countdown
-    test_countdown_large
-    test_define
-    test_define_expression
-    test_division
-    test_empty_list
-    test_equality
-    test_factorial
-    test_factorial_larger
-    test_fibonacci
-    test_fibonacci_small
-    test_filter_function
-    test_greater_than
-    test_higher_order_function
-    test_if_false
-    test_if_nested
-    test_if_nil_is_false
-    test_if_non_boolean_is_true
-    test_if_true
-    test_lambda_basic
-    test_lambda_closure
-    test_lambda_nested
-    test_lambda_no_args
-    test_length
-    test_less_than
-    test_list
-    test_map_function
-    test_multiple_definitions
-    test_multiplication
-    test_mutual_recursion
-    test_mutual_recursion_odd
-    test_nested_arithmetic
-    test_nested_empty_lists
-    test_nested_list_operations
-    test_nil
-    test_null_predicate
-    test_numbers
-    test_parse_comments
-    test_parse_multiline
-    test_parse_whitespace
-    test_quote
-    test_reverse
-    test_self_referential_list
-    test_single_element_list
-    test_subtraction
-    test_sum_list
-    test_tail_recursive_factorial
-    test_tail_recursive_sum
-    test_temporary_values_cleaned_up
-    test_zero_arithmetic
-
-test result: FAILED. 14 passed; 60 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
-
-error: test failed, to rerun pass `--test tests`
-warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:527:19
-    |
-527 |     pub fn borrow(&self) -> core::cell::Ref<Env> {
-    |                   ^^^^^     ^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
-    |                   |
-    |                   the lifetime is elided here
-    |
-    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
-    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
-help: use `'_` for type paths
-    |
-527 |     pub fn borrow(&self) -> core::cell::Ref<'_, Env> {
-    |                                             +++
-
-warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:531:23
-    |
-531 |     pub fn borrow_mut(&self) -> core::cell::RefMut<Env> {
-    |                       ^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
-    |                       |
-    |                       the lifetime is elided here
-    |
-    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
-help: use `'_` for type paths
-    |
-531 |     pub fn borrow_mut(&self) -> core::cell::RefMut<'_, Env> {
-    |                                                    +++
-
-warning: `ruthe` (lib) generated 2 warnings (run `cargo fix --lib -p ruthe` to apply 2 suggestions)
-warning: unused import: `alloc::vec::Vec`
- --> tests/test2.rs:4:5
-  |
-4 | use alloc::vec::Vec;
-  |     ^^^^^^^^^^^^^^^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
-
 warning: unused variable: `count4`
-   --> tests/test2.rs:573:9
+   --> tests/test2.rs:560:9
     |
-573 |     let count4 = get_env_refcount(&env2);
+560 |     let count4 = get_env_refcount(&env2);
     |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_count4`
     |
     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
-warning: function `eval_and_check` is never used
-  --> tests/test2.rs:15:4
-   |
-15 | fn eval_and_check(program: &str, env: &EnvRef) -> Result<String, String> {
-   |    ^^^^^^^^^^^^^^
-   |
-   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: `ruthe` (test "test2") generated 3 warnings (run `cargo fix --test "test2" -p ruthe` to apply 2 suggestions)
+warning: `ruthe` (test "test2") generated 1 warning (run `cargo fix --test "test2" -p ruthe` to apply 1 suggestion)
     Finished `release` profile [optimized] target(s) in 0.00s
      Running tests/test2.rs (target/release/deps/test2-00fda4cb0b873a75)
 
@@ -555,21 +48,21 @@ test test_empty_environment_operations ... ok
 test test_lambda_environment_capture ... ok
 test test_multiple_closures_same_env ... FAILED
 test test_errors_dont_leak_during_evaluation ... ok
+test test_nested_quote_structures ... ok
 test test_deeply_nested_scopes ... FAILED
 test test_partial_evaluation_errors ... ok
-test test_nested_quote_structures ... ok
-test test_repeated_lambda_creation ... ok
 test test_repeated_definitions ... ok
-test test_kitchen_sink_stress ... ok
+test test_repeated_lambda_creation ... ok
+test test_stress_alternating_success_and_error ... ok
 test test_valref_clone_correctness ... ok
 test test_valref_shared_substructure ... FAILED
-test test_stress_alternating_success_and_error ... ok
+test test_kitchen_sink_stress ... ok
 test test_immediate_drop_stress ... ok
-test test_huge_list_creation_and_destruction ... FAILED
 test test_append_large_lists ... FAILED
-test test_stress_many_small_operations ... ok
-test test_repeated_recursive_calls ... ok
+test test_huge_list_creation_and_destruction ... FAILED
 test test_errors_in_deeply_nested_calls ... ok
+test test_repeated_recursive_calls ... ok
+test test_stress_many_small_operations ... ok
 test test_mutual_recursion_deep ... ok
 test test_repeated_large_allocations ... ok
 test test_extreme_tail_recursion ... FAILED
@@ -580,38 +73,38 @@ failures:
 
 ---- test_chain_of_environments stdout ----
 
-thread 'test_chain_of_environments' (69137075) panicked at tests/test2.rs:204:36:
+thread 'test_chain_of_environments' (69143479) panicked at tests/test2.rs:191:36:
 called `Result::unwrap()` on an `Err` value: ()
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
 ---- test_multiple_closures_same_env stdout ----
 
-thread 'test_multiple_closures_same_env' (69137088) panicked at tests/test2.rs:168:36:
+thread 'test_multiple_closures_same_env' (69143492) panicked at tests/test2.rs:155:36:
 called `Result::unwrap()` on an `Err` value: ()
 
 ---- test_deeply_nested_scopes stdout ----
 
-thread 'test_deeply_nested_scopes' (69137077) panicked at tests/test2.rs:136:36:
+thread 'test_deeply_nested_scopes' (69143481) panicked at tests/test2.rs:123:36:
 called `Result::unwrap()` on an `Err` value: ()
 
 ---- test_valref_shared_substructure stdout ----
 
-thread 'test_valref_shared_substructure' (69137099) panicked at tests/test2.rs:489:36:
-called `Result::unwrap()` on an `Err` value: ()
-
----- test_huge_list_creation_and_destruction stdout ----
-
-thread 'test_huge_list_creation_and_destruction' (69137083) panicked at tests/test2.rs:241:36:
+thread 'test_valref_shared_substructure' (69143503) panicked at tests/test2.rs:476:36:
 called `Result::unwrap()` on an `Err` value: ()
 
 ---- test_append_large_lists stdout ----
 
-thread 'test_append_large_lists' (69137074) panicked at tests/test2.rs:303:36:
+thread 'test_append_large_lists' (69143478) panicked at tests/test2.rs:290:36:
+called `Result::unwrap()` on an `Err` value: ()
+
+---- test_huge_list_creation_and_destruction stdout ----
+
+thread 'test_huge_list_creation_and_destruction' (69143487) panicked at tests/test2.rs:228:36:
 called `Result::unwrap()` on an `Err` value: ()
 
 ---- test_extreme_tail_recursion stdout ----
 
-thread 'test_extreme_tail_recursion' (69137082) panicked at tests/test2.rs:48:32:
+thread 'test_extreme_tail_recursion' (69143486) panicked at tests/test2.rs:35:32:
 called `Result::unwrap()` on an `Err` value: ()
 
 
@@ -627,3 +120,160 @@ failures:
 test result: FAILED. 20 passed; 7 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
 
 error: test failed, to rerun pass `--test test2`
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:530:19
+    |
+530 |     pub fn borrow(&self) -> core::cell::Ref<Env> {
+    |                   ^^^^^     ^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                   |
+    |                   the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+530 |     pub fn borrow(&self) -> core::cell::Ref<'_, Env> {
+    |                                             +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:534:23
+    |
+534 |     pub fn borrow_mut(&self) -> core::cell::RefMut<Env> {
+    |                       ^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                       |
+    |                       the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+534 |     pub fn borrow_mut(&self) -> core::cell::RefMut<'_, Env> {
+    |                                                    +++
+
+warning: `ruthe` (lib) generated 2 warnings (run `cargo fix --lib -p ruthe` to apply 2 suggestions)
+warning: unused variable: `count_after_define`
+   --> tests/tests.rs:742:9
+    |
+742 |     let count_after_define = Rc::strong_count(&env.0);
+    |         ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_count_after_define`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ruthe` (test "tests") generated 1 warning (run `cargo fix --test "tests" -p ruthe` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.00s
+     Running tests/tests.rs (target/release/deps/tests-c2e09e891a675fcc)
+
+running 74 tests
+test test_addition ... ok
+test test_booleans ... ok
+test test_arity_mismatch ... ok
+test test_append ... ok
+test test_car ... ok
+test test_complex_lambda_expression ... ok
+test test_cons ... ok
+test test_cdr ... ok
+test test_cons_predicate ... ok
+test test_define ... FAILED
+test test_define_expression ... FAILED
+test test_division ... ok
+test test_empty_list ... ok
+test test_division_by_zero ... ok
+test test_ackermann_small ... ok
+test test_environment_bindings_cleanup ... ok
+test test_equality ... ok
+test test_factorial ... ok
+test test_greater_than ... ok
+test test_factorial_larger ... ok
+test test_if_nil_is_false ... ok
+test test_if_false ... ok
+test test_if_nested ... ok
+test test_higher_order_function ... FAILED
+test test_if_non_boolean_is_true ... ok
+test test_fibonacci_small ... ok
+test test_filter_function ... ok
+test test_if_true ... ok
+test test_invalid_function_call ... ok
+test test_lambda_basic ... ok
+test test_lambda_nested ... ok
+test test_lambda_closure ... FAILED
+test test_lambda_no_args ... ok
+test test_length ... ok
+test test_less_than ... ok
+test test_list ... ok
+test test_multiple_definitions ... ok
+test test_multiplication ... ok
+test test_map_function ... ok
+test test_nested_arithmetic ... ok
+test test_nested_empty_lists ... ok
+test test_mutual_recursion_odd ... ok
+test test_nil ... ok
+test test_no_leak_with_errors ... ok
+test test_nested_list_operations ... ok
+test test_no_memory_leak_lambda_closure ... ok
+test test_mutual_recursion ... ok
+test test_no_memory_leak_multiple_evaluations ... ok
+test test_numbers ... ok
+test test_parse_comments ... ok
+test test_parse_multiline ... ok
+test test_parse_whitespace ... ok
+test test_null_predicate ... ok
+test test_reverse ... ok
+test test_single_element_list ... ok
+test test_quote ... ok
+test test_self_referential_list ... ok
+test test_no_memory_leak_nested_lambdas ... ok
+test test_subtraction ... ok
+test test_tail_recursive_factorial ... ok
+test test_no_memory_leak_simple_recursion ... ok
+test test_unbound_symbol ... ok
+test test_fibonacci ... ok
+test test_type_error_arithmetic ... ok
+test test_temporary_values_cleaned_up ... FAILED
+test test_valref_cleanup ... ok
+test test_sum_list ... ok
+test test_zero_arithmetic ... ok
+test test_no_memory_leak_list_operations ... ok
+test test_no_unbounded_growth ... ok
+test test_countdown ... ok
+test test_tail_recursive_sum ... ok
+test test_ackermann ... ok
+test test_countdown_large ... ok
+
+failures:
+
+---- test_define stdout ----
+
+thread 'test_define' (69143582) panicked at tests/tests.rs:223:36:
+called `Result::unwrap()` on an `Err` value: ()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- test_define_expression stdout ----
+
+thread 'test_define_expression' (69143583) panicked at tests/tests.rs:243:36:
+called `Result::unwrap()` on an `Err` value: ()
+
+---- test_higher_order_function stdout ----
+
+thread 'test_higher_order_function' (69143595) panicked at tests/tests.rs:301:36:
+called `Result::unwrap()` on an `Err` value: ()
+
+---- test_lambda_closure stdout ----
+
+thread 'test_lambda_closure' (69143603) panicked at tests/tests.rs:275:36:
+called `Result::unwrap()` on an `Err` value: ()
+
+---- test_temporary_values_cleaned_up stdout ----
+
+thread 'test_temporary_values_cleaned_up' (69143638) panicked at tests/tests.rs:787:36:
+called `Result::unwrap()` on an `Err` value: ()
+
+
+failures:
+    test_define
+    test_define_expression
+    test_higher_order_function
+    test_lambda_closure
+    test_temporary_values_cleaned_up
+
+test result: FAILED. 69 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `--test tests`

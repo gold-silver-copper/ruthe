@@ -1,7 +1,6 @@
 #![cfg(test)]
 extern crate alloc;
 use alloc::rc::Rc;
-use alloc::vec::Vec;
 use ruthe::*;
 
 // ============================================================================
@@ -10,18 +9,6 @@ use ruthe::*;
 
 fn get_env_refcount(env: &EnvRef) -> usize {
     Rc::strong_count(&env.0)
-}
-
-fn eval_and_check(program: &str, env: &EnvRef) -> Result<String, String> {
-    eval_str(program, env)
-        .map(|s| {
-            let mut buf = [0u8; 4096];
-            s.to_str_buf(&mut buf).unwrap().to_string()
-        })
-        .map_err(|e| {
-            let mut buf = [0u8; 256];
-            e.to_str_buf(&mut buf).unwrap().to_string()
-        })
 }
 
 // ============================================================================
@@ -45,7 +32,7 @@ fn test_extreme_tail_recursion() {
 
     let result = eval_str_multiple(program, &env).map(|s| {
         let mut buf = [0u8; 256];
-        s.to_str_buf(&mut buf).unwrap().to_string()
+        s.to_display_str(&mut buf).unwrap().to_string()
     });
 
     assert_eq!(result, Ok("10000".to_string()));
@@ -133,7 +120,7 @@ fn test_deeply_nested_scopes() {
     assert_eq!(
         result.map(|s| {
             let mut buf = [0u8; 256];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string()
         }),
         Ok("42".to_string())
     );
@@ -165,7 +152,7 @@ fn test_multiple_closures_same_env() {
     assert_eq!(
         result.map(|s| {
             let mut buf = [0u8; 256];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string()
         }),
         Ok("401".to_string())
     );
@@ -201,7 +188,7 @@ fn test_chain_of_environments() {
     assert_eq!(
         result.map(|s| {
             let mut buf = [0u8; 256];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string()
         }),
         Ok("35".to_string())
     );
@@ -238,7 +225,7 @@ fn test_huge_list_creation_and_destruction() {
     assert_eq!(
         result.map(|s| {
             let mut buf = [0u8; 256];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string()
         }),
         Ok("1000".to_string())
     );
@@ -300,7 +287,7 @@ fn test_append_large_lists() {
     assert_eq!(
         result.map(|s| {
             let mut buf = [0u8; 256];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string()
         }),
         Ok("1000".to_string())
     );
@@ -486,7 +473,7 @@ fn test_valref_shared_substructure() {
     assert_eq!(
         result.map(|s| {
             let mut buf = [0u8; 256];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string()
         }),
         Ok("12".to_string())
     );

@@ -11,11 +11,11 @@ fn eval_test(input: &str) -> Result<String, String> {
     eval_str(input, &env)
         .map(|s| {
             let mut buf = [0u8; 4096];
-            s.to_display_str(&mut buf).unwrap().to_string() // Changed from to_str_buf
+            s.to_display_str(&mut buf).unwrap().to_string() // Changed from to_display_str
         })
         .map_err(|e| {
             let mut buf = [0u8; 256];
-            e.to_str_buf(&mut buf).unwrap().to_string()
+            e.to_display_str(&mut buf).unwrap().to_string()
         })
 }
 
@@ -24,11 +24,11 @@ fn eval_multiple_test(input: &str) -> Result<String, String> {
     eval_str_multiple(input, &env)
         .map(|s| {
             let mut buf = [0u8; 4096];
-            s.to_display_str(&mut buf).unwrap().to_string() // Changed from to_str_buf
+            s.to_display_str(&mut buf).unwrap().to_string() // Changed from to_display_str
         })
         .map_err(|e| {
             let mut buf = [0u8; 256];
-            e.to_str_buf(&mut buf).unwrap().to_string()
+            e.to_display_str(&mut buf).unwrap().to_string()
         })
 }
 // ============================================================================
@@ -220,14 +220,14 @@ fn test_define() {
     assert_eq!(
         eval_str("(define x 42)", &env).map(|s| {
             let mut buf = [0u8; 256];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string()
         }),
         Ok("42".to_string())
     );
     assert_eq!(
         eval_str("x", &env).map(|s| {
             let mut buf = [0u8; 256];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string()
         }),
         Ok("42".to_string())
     );
@@ -240,7 +240,7 @@ fn test_define_expression() {
     assert_eq!(
         eval_str("y", &env).map(|s| {
             let mut buf = [0u8; 256];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string()
         }),
         Ok("30".to_string())
     );
@@ -272,7 +272,7 @@ fn test_lambda_closure() {
     assert_eq!(
         eval_str("(f 5)", &env).map(|s| {
             let mut buf = [0u8; 256];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string()
         }),
         Ok("15".to_string())
     );
@@ -298,7 +298,7 @@ fn test_higher_order_function() {
     assert_eq!(
         eval_str("(add5 10)", &env).map(|s| {
             let mut buf = [0u8; 256];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string()
         }),
         Ok("15".to_string())
     );
@@ -784,7 +784,7 @@ fn test_temporary_values_cleaned_up() {
     assert_eq!(
         result.map(|s| {
             let mut buf = [0u8; 256];
-            s.to_str_buf(&mut buf).unwrap().to_string()
+            s.to_display_str(&mut buf).unwrap().to_string()
         }),
         Ok("15".to_string())
     );
