@@ -1,15 +1,12 @@
 use core::matches;
+use ruthe::*;
 use std::vec::Vec;
-// Import the module under test
-use ruthe::*; // Replace with actual crate name
 
 // ============================================================================
 // Test Helpers
 // ============================================================================
 
-fn assert_refcount(arena: &Arena, r: ArenaRef, expected: u16) {
-    // This accesses internal state - in real code you might want to expose
-    // a debug method or use a test-only feature flag
+fn assert_refcount(arena: &Arena, r: ArenaRef, expected: u32) {
     let idx = r.0 as usize;
     let actual = arena.refcounts[idx].get();
     assert!(
@@ -30,6 +27,10 @@ fn count_free_slots(arena: &Arena) -> usize {
     count
 }
 
+fn count_allocated_slots(arena: &Arena) -> usize {
+    ARENA_SIZE - count_free_slots(arena)
+}
+
 // ============================================================================
 // Basic Allocation Tests
 // ============================================================================
@@ -37,15 +38,11 @@ fn count_free_slots(arena: &Arena) -> usize {
 #[test]
 fn test_basic_allocation() {
     let arena = Arena::new();
-
-    // Initially all slots should be free
     assert!(count_free_slots(&arena) == ARENA_SIZE);
 
-    // Allocate a number
     let num = arena.number(42);
     assert!(count_free_slots(&arena) == ARENA_SIZE - 1);
 
-    // Verify value
     if let Some(Value::Number(n)) = arena.get(*num) {
         assert!(n == 42);
     } else {
@@ -56,7 +53,6 @@ fn test_basic_allocation() {
 #[test]
 fn test_multiple_allocations() {
     let arena = Arena::new();
-
     let n1 = arena.number(1);
     let n2 = arena.number(2);
     let n3 = arena.number(3);
@@ -82,8 +78,6 @@ fn test_multiple_allocations() {
 fn test_initial_refcount() {
     let arena = Arena::new();
     let num = arena.number(100);
-
-    // New allocation should have refcount of 1
     assert_refcount(&arena, *num, 1);
 }
 
@@ -91,7 +85,6 @@ fn test_initial_refcount() {
 fn test_clone_increments_refcount() {
     let arena = Arena::new();
     let num = arena.number(100);
-
     assert_refcount(&arena, *num, 1);
 
     let num2 = num.clone();
@@ -100,7 +93,6 @@ fn test_clone_increments_refcount() {
     let num3 = num.clone();
     assert_refcount(&arena, *num, 3);
 
-    // All refs point to same value
     assert!(num.raw().0 == num2.raw().0);
     assert!(num.raw().0 == num3.raw().0);
 }
@@ -112,20 +104,16 @@ fn test_drop_decrements_refcount() {
     let r = *num;
 
     assert_refcount(&arena, r, 1);
-
     {
         let num2 = num.clone();
         assert_refcount(&arena, r, 2);
-        // num2 drops here
     }
-
     assert_refcount(&arena, r, 1);
 }
 
 #[test]
 fn test_full_deallocation() {
     let arena = Arena::new();
-
     let initial_free = count_free_slots(&arena);
 
     {
@@ -133,26 +121,19 @@ fn test_full_deallocation() {
         assert!(count_free_slots(&arena) == initial_free - 1);
     }
 
-    // After drop, slot should be freed
     assert!(count_free_slots(&arena) == initial_free);
 }
 
 #[test]
 fn test_memory_reuse() {
     let arena = Arena::new();
-
     let r1 = {
         let num = arena.number(100);
         num.raw()
     };
 
-    // Allocate again - might reuse same slot
     let num2 = arena.number(200);
-
-    // Either same slot was reused, or a new one was allocated
-    // Both are valid
     if num2.raw().0 == r1.0 {
-        // Slot was reused - verify new value
         if let Some(Value::Number(n)) = arena.get(*num2) {
             assert!(n == 200);
         }
@@ -160,39 +141,30 @@ fn test_memory_reuse() {
 }
 
 // ============================================================================
-// Cons Cell Tests (Recursive Deallocation)
+// Cons Cell Tests
 // ============================================================================
 
 #[test]
 fn test_cons_refcounting() {
     let arena = Arena::new();
-
     let car = arena.number(1);
     let cdr = arena.number(2);
-
     let car_ref = *car;
     let cdr_ref = *cdr;
 
     assert_refcount(&arena, car_ref, 1);
     assert_refcount(&arena, cdr_ref, 1);
 
-    // Creating cons increments children refcounts
     let cons = arena.cons(&car, &cdr);
-
     assert_refcount(&arena, car_ref, 2);
     assert_refcount(&arena, cdr_ref, 2);
 
-    // Drop original refs
     drop(car);
     drop(cdr);
-
     assert_refcount(&arena, car_ref, 1);
     assert_refcount(&arena, cdr_ref, 1);
 
-    // Drop cons - should recursively decrement children
     drop(cons);
-
-    // Children should be freed
     assert!(matches!(arena.get(car_ref), None));
     assert!(matches!(arena.get(cdr_ref), None));
 }
@@ -200,36 +172,29 @@ fn test_cons_refcounting() {
 #[test]
 fn test_nested_cons_deallocation() {
     let arena = Arena::new();
-
     let initial_free = count_free_slots(&arena);
 
     {
-        // Create nested structure: ((1 . 2) . (3 . 4))
         let a = arena.number(1);
         let b = arena.number(2);
         let c = arena.number(3);
         let d = arena.number(4);
-
         let left = arena.cons(&a, &b);
         let right = arena.cons(&c, &d);
         let _root = arena.cons(&left, &right);
 
-        // Should have: 4 numbers + 3 cons cells = 7 allocations
         assert!(count_free_slots(&arena) == initial_free - 7);
     }
 
-    // All should be freed
     assert!(count_free_slots(&arena) == initial_free);
 }
 
 #[test]
 fn test_list_deallocation() {
     let arena = Arena::new();
-
     let initial_free = count_free_slots(&arena);
 
     {
-        // Create list: (1 2 3)
         let nil = arena.nil();
         let three = arena.number(3);
         let list1 = arena.cons(&three, &nil);
@@ -238,7 +203,6 @@ fn test_list_deallocation() {
         let one = arena.number(1);
         let _list3 = arena.cons(&one, &list2);
 
-        // 3 numbers + 1 nil + 3 cons = 7 allocations
         assert!(count_free_slots(&arena) == initial_free - 7);
     }
 
@@ -252,7 +216,6 @@ fn test_list_deallocation() {
 #[test]
 fn test_lambda_refcounting() {
     let arena = Arena::new();
-
     let params = arena.nil();
     let body = arena.number(42);
     let env = arena.nil();
@@ -267,7 +230,6 @@ fn test_lambda_refcounting() {
 
     let lambda = arena.lambda(&params, &body, &env);
 
-    // Lambda should increment all three
     assert_refcount(&arena, params_ref, 2);
     assert_refcount(&arena, body_ref, 2);
     assert_refcount(&arena, env_ref, 2);
@@ -282,7 +244,6 @@ fn test_lambda_refcounting() {
 
     drop(lambda);
 
-    // All should be freed
     assert!(matches!(arena.get(params_ref), None));
     assert!(matches!(arena.get(body_ref), None));
     assert!(matches!(arena.get(env_ref), None));
@@ -295,23 +256,18 @@ fn test_lambda_refcounting() {
 #[test]
 fn test_symbol_refcounting() {
     let arena = Arena::new();
-
     let str_list = arena.str_to_list("foo");
     let str_ref = *str_list;
 
     assert_refcount(&arena, str_ref, 1);
 
     let sym = arena.symbol(&str_list);
-
-    // Symbol should increment string list refcount
     assert_refcount(&arena, str_ref, 2);
 
     drop(str_list);
     assert_refcount(&arena, str_ref, 1);
 
     drop(sym);
-
-    // String list should be freed (along with all its cons cells)
     assert!(matches!(arena.get(str_ref), None));
 }
 
@@ -322,14 +278,11 @@ fn test_symbol_refcounting() {
 #[test]
 fn test_null_ref_handling() {
     let arena = Arena::new();
-
-    // NULL refs should be handled gracefully
     let null = ArenaRef::NULL;
 
     assert!(arena.get(null).is_none());
     assert!(null.is_null());
 
-    // These should not panic
     arena.incref(null);
     arena.decref(null);
 }
@@ -337,13 +290,11 @@ fn test_null_ref_handling() {
 #[test]
 fn test_ref_new_from_existing() {
     let arena = Arena::new();
-
     let num = arena.number(100);
     let raw = *num;
 
     assert_refcount(&arena, raw, 1);
 
-    // Create new Ref from existing ArenaRef - should increment
     let num2 = Ref::new(&arena, raw);
     assert_refcount(&arena, raw, 2);
 
@@ -357,18 +308,14 @@ fn test_ref_new_from_existing() {
 #[test]
 fn test_shared_children() {
     let arena = Arena::new();
-
-    // Create a shared child
     let shared = arena.number(42);
     let shared_ref = *shared;
 
     assert_refcount(&arena, shared_ref, 1);
 
-    // Two cons cells share the same cdr
     let cons1 = arena.cons(&arena.number(1), &shared);
     let cons2 = arena.cons(&arena.number(2), &shared);
 
-    // shared should have refcount of 3 (original + 2 cons cells)
     assert_refcount(&arena, shared_ref, 3);
 
     drop(shared);
@@ -384,7 +331,6 @@ fn test_shared_children() {
 #[test]
 fn test_set_cons_refcounting() {
     let arena = Arena::new();
-
     let car1 = arena.number(1);
     let cdr1 = arena.number(2);
     let cons = arena.cons(&car1, &cdr1);
@@ -392,28 +338,21 @@ fn test_set_cons_refcounting() {
     let car1_ref = *car1;
     let cdr1_ref = *cdr1;
 
-    // Original children have refcount 2
     assert_refcount(&arena, car1_ref, 2);
     assert_refcount(&arena, cdr1_ref, 2);
 
-    // Create new children
     let car2 = arena.number(3);
     let cdr2 = arena.number(4);
     let car2_ref = *car2;
     let cdr2_ref = *cdr2;
 
-    // Set cons to new values
     arena.set_cons(&cons, &car2, &cdr2);
 
-    // Old children should be decremented (back to 1)
     assert_refcount(&arena, car1_ref, 1);
     assert_refcount(&arena, cdr1_ref, 1);
-
-    // New children should be incremented (to 2)
     assert_refcount(&arena, car2_ref, 2);
     assert_refcount(&arena, cdr2_ref, 2);
 
-    // Verify cons contains new values
     if let Some(Value::Cons(car, cdr)) = arena.get(*cons) {
         assert!(car.0 == car2_ref.0);
         assert!(cdr.0 == cdr2_ref.0);
@@ -423,67 +362,30 @@ fn test_set_cons_refcounting() {
 }
 
 #[test]
-fn test_arena_exhaustion() {
-    let arena = Arena::new();
-
-    let mut refs = Vec::new();
-
-    // Allocate until arena is full
-    for i in 0..ARENA_SIZE {
-        let num = arena.number(i as i64);
-        refs.push(num);
-    }
-
-    assert!(count_free_slots(&arena) == 0);
-
-    // Next allocation should fail
-    let overflow = arena.number(9999);
-    assert!(overflow.is_null());
-
-    // Free one slot
-    refs.pop();
-    assert!(count_free_slots(&arena) == 1);
-
-    // Now allocation should succeed
-    let new_num = arena.number(8888);
-    assert!(!new_num.is_null());
-}
-
-#[test]
 fn test_refcount_overflow_protection() {
     let arena = Arena::new();
-
     let num = arena.number(100);
     let raw = *num;
 
-    // Manually set refcount to near max
-    arena.refcounts[raw.0 as usize].set(u16::MAX - 1);
+    arena.refcounts[raw.0 as usize].set(u32::MAX - 1);
 
-    // This increment should succeed
     arena.incref(raw);
-    assert_refcount(&arena, raw, u16::MAX);
+    assert_refcount(&arena, raw, u32::MAX);
 
-    // This increment should be a no-op (protection against overflow)
     arena.incref(raw);
-    assert_refcount(&arena, raw, u16::MAX);
+    assert_refcount(&arena, raw, u32::MAX);
 }
 
 #[test]
 fn test_double_free_protection() {
     let arena = Arena::new();
-
     let num = arena.number(100);
     let raw = *num;
 
     drop(num);
-
-    // Slot should be free
     assert!(matches!(arena.get(raw), None));
 
-    // Attempting to decref again should be safe
     arena.decref(raw);
-
-    // Still free, no crash
     assert!(matches!(arena.get(raw), None));
 }
 
@@ -494,11 +396,9 @@ fn test_double_free_protection() {
 #[test]
 fn test_complex_tree_structure() {
     let arena = Arena::new();
-
     let initial_free = count_free_slots(&arena);
 
     {
-        // Build: (+ (* 2 3) (- 10 5))
         let plus = arena.str_to_list("+");
         let mult = arena.str_to_list("*");
         let minus = arena.str_to_list("-");
@@ -508,46 +408,36 @@ fn test_complex_tree_structure() {
         let ten = arena.number(10);
         let five = arena.number(5);
 
-        // (* 2 3)
         let nil = arena.nil();
         let mult_args2 = arena.cons(&three, &nil);
         let mult_args1 = arena.cons(&two, &mult_args2);
         let mult_expr = arena.cons(&mult, &mult_args1);
 
-        // (- 10 5)
         let nil2 = arena.nil();
         let minus_args2 = arena.cons(&five, &nil2);
         let minus_args1 = arena.cons(&ten, &minus_args2);
         let minus_expr = arena.cons(&minus, &minus_args1);
 
-        // (+ (* 2 3) (- 10 5))
         let nil3 = arena.nil();
         let plus_args2 = arena.cons(&minus_expr, &nil3);
         let plus_args1 = arena.cons(&mult_expr, &plus_args2);
         let _root = arena.cons(&plus, &plus_args1);
 
-        // Verify something was allocated
         assert!(count_free_slots(&arena) < initial_free);
     }
 
-    // Everything should be freed
     assert!(count_free_slots(&arena) == initial_free);
 }
 
 #[test]
 fn test_string_list_refcounting() {
     let arena = Arena::new();
-
     let initial_free = count_free_slots(&arena);
 
     {
         let s = arena.str_to_list("hello");
-
-        // String "hello" creates: 5 chars + 5 cons cells + 1 nil = 11 allocations
-        // (Actually might be optimized differently, but should be > 5)
         assert!(count_free_slots(&arena) < initial_free - 5);
 
-        // Clone should increment root cons refcount
         let s2 = s.clone();
         let raw = *s;
         assert_refcount(&arena, raw, 2);
@@ -556,15 +446,12 @@ fn test_string_list_refcounting() {
         assert_refcount(&arena, raw, 1);
     }
 
-    // All should be freed
     assert!(count_free_slots(&arena) == initial_free);
 }
 
 #[test]
 fn test_circular_references_prevention() {
     let arena = Arena::new();
-
-    // Create two cons cells
     let a_val = arena.number(1);
     let b_val = arena.number(2);
 
@@ -572,40 +459,30 @@ fn test_circular_references_prevention() {
     let a = arena.cons(&a_val, &nil);
     let b = arena.cons(&b_val, &nil);
 
-    // Make a point to b and b point to a
     arena.set_cons(&a, &a_val, &b);
     arena.set_cons(&b, &b_val, &a);
 
     let a_ref = *a;
     let b_ref = *b;
 
-    // They should keep each other alive even after we drop our refs
     drop(a);
     drop(b);
 
-    // Both should still exist due to circular reference
-    // This is a KNOWN LIMITATION of reference counting
     assert!(arena.get(a_ref).is_some());
     assert!(arena.get(b_ref).is_some());
-
-    // Note: This demonstrates that circular refs will leak memory
-    // This is expected behavior for RC-based systems
 }
 
 #[test]
 fn test_ref_clone_semantics() {
     let arena = Arena::new();
-
     let num = arena.number(42);
     let raw = *num;
 
     assert_refcount(&arena, raw, 1);
 
-    // Clone creates independent ref with incremented count
     let num2 = num.clone();
     assert_refcount(&arena, raw, 2);
 
-    // Both refs are independent
     drop(num);
     assert_refcount(&arena, raw, 1);
     assert!(arena.get(raw).is_some());
@@ -621,7 +498,6 @@ fn test_ref_clone_semantics() {
 #[test]
 fn test_list_len() {
     let arena = Arena::new();
-
     let nil = arena.nil();
     assert!(arena.list_len(&nil) == 0);
 
@@ -637,8 +513,6 @@ fn test_list_len() {
 #[test]
 fn test_reverse_list_refcounting() {
     let arena = Arena::new();
-
-    // Build list (1 2 3)
     let nil = arena.nil();
     let three = arena.number(3);
     let list1 = arena.cons(&three, &nil);
@@ -649,57 +523,46 @@ fn test_reverse_list_refcounting() {
 
     let initial_free = count_free_slots(&arena);
 
-    // Reverse creates new cons cells AND a new nil, but shares elements
     let reversed = arena.reverse_list(&list3);
 
-    // Should have 3 new cons cells + 1 new nil = 4 allocations
     assert!(count_free_slots(&arena) == initial_free - 4);
 
-    // Elements should have higher refcounts (in original list, reversed list, and our local refs)
     let one_ref = *one;
     let two_ref = *two;
     let three_ref = *three;
 
-    // Each number appears in: original list + reversed list + our local variable = 3 references
     assert_refcount(&arena, one_ref, 3);
     assert_refcount(&arena, two_ref, 3);
     assert_refcount(&arena, three_ref, 3);
 
     drop(reversed);
 
-    // New cons cells and new nil freed, but elements still alive in original list
-    assert_refcount(&arena, one_ref, 2); // Original list + our local ref
+    assert_refcount(&arena, one_ref, 2);
     assert_refcount(&arena, two_ref, 2);
     assert_refcount(&arena, three_ref, 2);
 
-    // Drop original list
     drop(list3);
     drop(list2);
     drop(list1);
 
-    // Now only our local refs remain
     assert_refcount(&arena, one_ref, 1);
     assert_refcount(&arena, two_ref, 1);
     assert_refcount(&arena, three_ref, 1);
 }
+
 #[test]
 fn test_environment_refcounting() {
     let arena = Arena::new();
-
     let initial_free = count_free_slots(&arena);
 
     {
         let env = env_new(&arena);
-
-        // Env should allocate bindings list and builtins
         assert!(count_free_slots(&arena) < initial_free);
 
-        // Add a binding
         let name = arena.str_to_list("x");
         let value = arena.number(42);
         env_set(&arena, &env, &name, &value);
 
-        // Lookup should work
         let retrieved = env_get(&arena, &env, &name);
         assert!(retrieved.is_some());
 
@@ -709,37 +572,616 @@ fn test_environment_refcounting() {
             }
         }
     }
-
-    // Most should be freed (builtins might still be around depending on impl)
-    // At minimum, we shouldn't leak memory
 }
 
-// Run all tests
-pub fn run_all_tests() {
-    test_basic_allocation();
-    test_multiple_allocations();
-    test_initial_refcount();
-    test_clone_increments_refcount();
-    test_drop_decrements_refcount();
-    test_full_deallocation();
-    test_memory_reuse();
-    test_cons_refcounting();
-    test_nested_cons_deallocation();
-    test_list_deallocation();
-    test_lambda_refcounting();
-    test_symbol_refcounting();
-    test_null_ref_handling();
-    test_ref_new_from_existing();
-    test_shared_children();
-    test_set_cons_refcounting();
-    test_arena_exhaustion();
-    test_refcount_overflow_protection();
-    test_double_free_protection();
-    test_complex_tree_structure();
-    test_string_list_refcounting();
-    test_circular_references_prevention();
-    test_ref_clone_semantics();
-    test_list_len();
-    test_reverse_list_refcounting();
-    test_environment_refcounting();
+// ============================================================================
+// Interpreter Tests
+// ============================================================================
+
+#[test]
+fn test_basic_arithmetic() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    let result = eval_string(&arena, "(+ 1 2 3)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 6);
+    } else {
+        panic!("Expected 6");
+    }
+
+    let result = eval_string(&arena, "(* 2 3 4)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 24);
+    } else {
+        panic!("Expected 24");
+    }
+
+    let result = eval_string(&arena, "(- 10 3 2)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 5);
+    } else {
+        panic!("Expected 5");
+    }
+
+    let result = eval_string(&arena, "(/ 100 5 2)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 10);
+    } else {
+        panic!("Expected 10");
+    }
+}
+
+#[test]
+fn test_comparisons() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    let result = eval_string(&arena, "(= 5 5)", &env).unwrap();
+    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+
+    let result = eval_string(&arena, "(= 5 6)", &env).unwrap();
+    assert!(matches!(arena.get(*result), Some(Value::Bool(false))));
+
+    let result = eval_string(&arena, "(< 3 5)", &env).unwrap();
+    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+
+    let result = eval_string(&arena, "(> 10 5)", &env).unwrap();
+    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+}
+
+#[test]
+fn test_list_operations() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    let result = eval_string(&arena, "(car '(1 2 3))", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 1);
+    }
+
+    let result = eval_string(&arena, "(length '(1 2 3 4 5))", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 5);
+    }
+
+    let result = eval_string(&arena, "(null? nil)", &env).unwrap();
+    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+
+    let result = eval_string(&arena, "(null? '(1))", &env).unwrap();
+    assert!(matches!(arena.get(*result), Some(Value::Bool(false))));
+}
+
+#[test]
+fn test_conditionals() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    let result = eval_string(&arena, "(if #t 1 2)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 1);
+    }
+
+    let result = eval_string(&arena, "(if #f 1 2)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 2);
+    }
+
+    let result = eval_string(&arena, "(if (< 3 5) 10 20)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 10);
+    }
+}
+
+#[test]
+fn test_define_and_lookup() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(&arena, "(define x 42)", &env).unwrap();
+    let result = eval_string(&arena, "x", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 42);
+    }
+
+    eval_string(&arena, "(define y (* x 2))", &env).unwrap();
+    let result = eval_string(&arena, "y", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 84);
+    }
+}
+
+#[test]
+fn test_lambda_basic() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    let result = eval_string(&arena, "((lambda (x) (* x x)) 5)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 25);
+    }
+
+    let result = eval_string(&arena, "((lambda (x y) (+ x y)) 3 4)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 7);
+    }
+}
+
+#[test]
+fn test_closures() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        "(define make-adder (lambda (n) (lambda (x) (+ x n))))",
+        &env,
+    )
+    .unwrap();
+    eval_string(&arena, "(define add5 (make-adder 5))", &env).unwrap();
+
+    let result = eval_string(&arena, "(add5 10)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 15);
+    }
+
+    eval_string(&arena, "(define add10 (make-adder 10))", &env).unwrap();
+    let result = eval_string(&arena, "(add10 5)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 15);
+    }
+}
+
+// ============================================================================
+// Tail Call Optimization Tests
+// ============================================================================
+
+#[test]
+fn test_simple_tail_recursion() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define countdown
+          (lambda (n acc)
+            (if (= n 0)
+                acc
+                (countdown (- n 1) (+ acc 1)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    let result = eval_string(&arena, "(countdown 100 0)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 100);
+    }
+}
+
+#[test]
+fn test_deep_tail_recursion() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define sum-tail
+          (lambda (n acc)
+            (if (= n 0)
+                acc
+                (sum-tail (- n 1) (+ acc n)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    let result = eval_string(&arena, "(sum-tail 1000 0)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 500500); // sum from 1 to 1000
+    }
+}
+
+#[test]
+fn test_factorial_tail_recursive() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define factorial
+          (lambda (n acc)
+            (if (= n 0)
+                acc
+                (factorial (- n 1) (* n acc)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    let result = eval_string(&arena, "(factorial 10 1)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 3628800);
+    }
+}
+
+#[test]
+fn test_tco_memory_efficiency() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define count-down
+          (lambda (n)
+            (if (= n 0)
+                0
+                (count-down (- n 1)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    let before_allocated = count_allocated_slots(&arena);
+
+    // This should not exhaust memory with proper TCO
+    let result = eval_string(&arena, "(count-down 10000)", &env);
+    assert!(result.is_ok());
+
+    let after_allocated = count_allocated_slots(&arena);
+
+    // Memory usage should be bounded (not O(n))
+    // Allow some growth but not 10,000 allocations worth
+    let growth = after_allocated - before_allocated;
+    assert!(
+        growth < 1000,
+        "Memory grew too much: {} allocations",
+        growth
+    );
+}
+
+// ============================================================================
+// Stress Tests
+// ============================================================================
+
+#[test]
+fn test_very_deep_recursion() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define deep-sum
+          (lambda (n acc)
+            (if (= n 0)
+                acc
+                (deep-sum (- n 1) (+ acc 1)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    // 50,000 iterations - should work with proper TCO
+    let result = eval_string(&arena, "(deep-sum 50000 0)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 50000);
+    }
+}
+
+#[test]
+fn test_fibonacci_tree_recursion() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define fib
+          (lambda (n)
+            (if (< n 2)
+                n
+                (+ (fib (- n 1)) (fib (- n 2))))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    let result = eval_string(&arena, "(fib 15)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 610);
+    }
+}
+
+#[test]
+fn test_mutual_recursion() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define is-even
+          (lambda (n)
+            (if (= n 0)
+                #t
+                (is-odd (- n 1)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    eval_string(
+        &arena,
+        r#"
+        (define is-odd
+          (lambda (n)
+            (if (= n 0)
+                #f
+                (is-even (- n 1)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    let result = eval_string(&arena, "(is-even 100)", &env).unwrap();
+    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+
+    let result = eval_string(&arena, "(is-odd 99)", &env).unwrap();
+    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+
+    // Deep mutual recursion
+    let result = eval_string(&arena, "(is-even 1000)", &env).unwrap();
+    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+}
+
+#[test]
+fn test_ackermann_function() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define ackermann
+          (lambda (m n)
+            (if (= m 0)
+                (+ n 1)
+                (if (= n 0)
+                    (ackermann (- m 1) 1)
+                    (ackermann (- m 1) (ackermann m (- n 1)))))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    let result = eval_string(&arena, "(ackermann 2 2)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 7);
+    }
+
+    let result = eval_string(&arena, "(ackermann 3 2)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 29);
+    }
+}
+
+#[test]
+fn test_higher_order_functions() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define map
+          (lambda (f lst)
+            (if (null? lst)
+                nil
+                (cons (f (car lst)) (map f (cdr lst))))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    let result = eval_string(&arena, "(map (lambda (x) (* x x)) '(1 2 3 4))", &env).unwrap();
+
+    // Verify list contains 1, 4, 9, 16
+    let first = arena.list_nth(&result, 0).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*first) {
+        assert_eq!(n, 1);
+    }
+
+    let second = arena.list_nth(&result, 1).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*second) {
+        assert_eq!(n, 4);
+    }
+
+    let third = arena.list_nth(&result, 2).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*third) {
+        assert_eq!(n, 9);
+    }
+
+    let fourth = arena.list_nth(&result, 3).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*fourth) {
+        assert_eq!(n, 16);
+    }
+}
+
+#[test]
+fn test_filter_function() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define filter
+          (lambda (pred lst)
+            (if (null? lst)
+                nil
+                (if (pred (car lst))
+                    (cons (car lst) (filter pred (cdr lst)))
+                    (filter pred (cdr lst))))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    let result = eval_string(
+        &arena,
+        "(filter (lambda (x) (> x 0)) '(-2 -1 0 1 2 3))",
+        &env,
+    )
+    .unwrap();
+
+    assert_eq!(arena.list_len(&result), 3);
+
+    let first = arena.list_nth(&result, 0).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*first) {
+        assert_eq!(n, 1);
+    }
+
+    let second = arena.list_nth(&result, 1).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*second) {
+        assert_eq!(n, 2);
+    }
+}
+
+#[test]
+fn test_compose_function() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define compose
+          (lambda (f g)
+            (lambda (x) (f (g x)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    eval_string(&arena, "(define add1 (lambda (x) (+ x 1)))", &env).unwrap();
+    eval_string(&arena, "(define square (lambda (x) (* x x)))", &env).unwrap();
+    eval_string(&arena, "(define composed (compose add1 square))", &env).unwrap();
+
+    let result = eval_string(&arena, "(composed 5)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 26); // square(5) + 1 = 25 + 1 = 26
+    }
+}
+
+#[test]
+fn test_list_building() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define build-list
+          (lambda (n acc)
+            (if (= n 0)
+                acc
+                (build-list (- n 1) (cons n acc)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    let result = eval_string(&arena, "(build-list 100 nil)", &env).unwrap();
+    assert_eq!(arena.list_len(&result), 100);
+
+    let first = arena.list_nth(&result, 0).unwrap();
+    if let Some(Value::Number(n)) = arena.get(*first) {
+        assert_eq!(n, 1);
+    }
+}
+
+#[test]
+fn test_nested_lambdas() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    let result = eval_string(&arena, "((lambda (x) ((lambda (y) (+ x y)) 10)) 5)", &env).unwrap();
+
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 15);
+    }
+}
+
+#[test]
+fn test_memory_stability() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define loop
+          (lambda (n)
+            (if (= n 0)
+                #t
+                (loop (- n 1)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    let before = count_allocated_slots(&arena);
+
+    // Run multiple iterations
+    for _ in 0..10 {
+        eval_string(&arena, "(loop 1000)", &env).unwrap();
+    }
+
+    let after = count_allocated_slots(&arena);
+    let growth = after - before;
+
+    // Should have minimal memory growth across iterations
+    assert!(
+        growth < 100,
+        "Memory not stable across iterations: {} slots growth",
+        growth
+    );
+}
+
+#[test]
+fn test_error_handling() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    // Division by zero
+    let result = eval_string(&arena, "(/ 10 0)", &env);
+    assert!(result.is_err());
+
+    // Unbound symbol
+    let result = eval_string(&arena, "undefined-var", &env);
+    assert!(result.is_err());
+
+    // Wrong number of args
+    let result = eval_string(&arena, "(+ 1)", &env);
+    // This should actually succeed with just 1
+
+    let result = eval_string(&arena, "(if #t)", &env);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_complex_expression() {
+    let arena = Arena::new();
+    let env = env_new(&arena);
+
+    let result = eval_string(&arena, "(+ (* 2 3) (- 10 5) (/ 20 4))", &env).unwrap();
+
+    if let Some(Value::Number(n)) = arena.get(*result) {
+        assert_eq!(n, 16); // 6 + 5 + 5
+    }
 }

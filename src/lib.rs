@@ -20,7 +20,7 @@ impl ArenaRef {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Value {
     Number(i64),
     Bool(bool),
@@ -33,6 +33,7 @@ pub enum Value {
     Free,
 }
 
+#[derive(Debug)]
 pub struct Arena {
     pub values: [Cell<Value>; ARENA_SIZE],
     pub refcounts: [Cell<u32>; ARENA_SIZE],
@@ -177,7 +178,7 @@ impl Arena {
 // ============================================================================
 // RAII Reference Wrapper - Automatic Reference Counting!
 // ============================================================================
-
+#[derive(Debug)]
 pub struct Ref<'a> {
     arena: &'a Arena,
     inner: ArenaRef,
