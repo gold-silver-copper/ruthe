@@ -2,11 +2,11 @@
 
 extern crate alloc;
 mod value;
-use value::*;
+pub use value::*;
 mod env;
-use env::*;
+pub use env::*;
 mod builtins;
-use builtins::*;
+pub use builtins::*;
 // ============================================================================
 // Tokenizer
 // ============================================================================
