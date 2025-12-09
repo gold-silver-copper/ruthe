@@ -9,7 +9,7 @@ use core::cell::Cell;
 const ARENA_SIZE: usize = 2048;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct ArenaRef(u16);
+pub struct ArenaRef(pub u16);
 
 impl ArenaRef {
     const NULL: ArenaRef = ArenaRef(u16::MAX);
