@@ -142,14 +142,18 @@ fn main() {
     benchmark_expression("null? nil", "(null? nil)", &env, 50000);
     benchmark_expression("cons? '(1 2)", "(cons? '(1 2))", &env, 50000);
 
-    // Large list operations - using self-application pattern since no define
+    // Large list operations
     println!("--- Large List Operations ---");
-    let large_list_program = r#"
-        ((lambda (big-list)
-           (length big-list))
-         '(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20))
-    "#;
-    benchmark_expression("length of 20-element list", large_list_program, &env, 10000);
+    let _ = eval_str_multiple(
+        "(define big-list '(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20))",
+        &env,
+    );
+    benchmark_expression(
+        "length of 20-element list",
+        "(length big-list)",
+        &env,
+        10000,
+    );
 
     // ========================================================================
     // SECTION 4: Conditional Expressions
@@ -190,100 +194,128 @@ fn main() {
     );
     benchmark_expression("Zero-arg lambda", "((lambda () 42))", &env, 50000);
 
-    // Closure tests using self-application pattern
-    let make_adder_program = r#"
-        ((lambda (make-adder)
-           ((lambda (add5)
-              ((lambda (add10)
-                 (+ (add5 10) (add10 5)))
-               (make-adder 10)))
-            (make-adder 5)))
-         (lambda (n) (lambda (x) (+ x n))))
-    "#;
-    benchmark_expression("Closure tests", make_adder_program, &env, 50000);
+    // Closure tests
+    let _ = eval_str_multiple(
+        r#"
+        (define make-adder (lambda (n) (lambda (x) (+ x n))))
+        (define add5 (make-adder 5))
+        (define add10 (make-adder 10))
+        "#,
+        &env,
+    );
+    benchmark_expression("Closure call", "(+ (add5 10) (add10 5))", &env, 50000);
 
     // Nested closures
-    let nested_closure_program = r#"
-        ((lambda (make-multiplier)
-           ((lambda (mul2)
-              ((lambda (mul2x3)
-                 (mul2x3 4))
-               (mul2 3)))
-            (make-multiplier 2)))
-         (lambda (a) (lambda (b) (lambda (c) (* a (* b c))))))
-    "#;
-    benchmark_expression("Nested closure call", nested_closure_program, &env, 50000);
+    let _ = eval_str_multiple(
+        r#"
+        (define make-multiplier 
+          (lambda (a) 
+            (lambda (b) 
+              (lambda (c) 
+                (* a (* b c))))))
+        (define mul2 (make-multiplier 2))
+        (define mul2x3 (mul2 3))
+        "#,
+        &env,
+    );
+    benchmark_expression("Nested closure call", "(mul2x3 4)", &env, 50000);
 
     // ========================================================================
-    // SECTION 6: Recursive Functions (using self-application)
+    // SECTION 6: Recursive Functions
     // ========================================================================
     println!("┌─────────────────────────────────────────────────────────────┐");
     println!("│ 6. RECURSIVE FUNCTIONS                                      │");
     println!("└─────────────────────────────────────────────────────────────┘\n");
 
-    // Fibonacci (tree recursion) - self-application pattern
+    // Fibonacci (tree recursion)
+    let _ = eval_str_multiple(
+        r#"
+        (define fib
+          (lambda (n)
+            (if (< n 2)
+                n
+                (+ (fib (- n 1)) (fib (- n 2))))))
+        "#,
+        &env,
+    );
+
     println!("--- Fibonacci (Tree Recursion) ---");
     for n in [5, 10, 15, 20, 25] {
-        let fib_program = format!(
-            r#"((lambda (fib) (fib fib {})) 
-                (lambda (self n) 
-                  (if (< n 2) 
-                      n 
-                      (+ (self self (- n 1)) (self self (- n 2))))))"#,
-            n
-        );
-        if let Ok(duration) = benchmark_single(&format!("fib({})", n), &fib_program, &env) {
+        if let Ok(duration) =
+            benchmark_single(&format!("fib({})", n), &format!("(fib {})", n), &env)
+        {
             println!("    Duration: {}", format_duration(duration));
         }
     }
     println!();
 
     // Factorial (simple recursion)
+    let _ = eval_str_multiple(
+        r#"
+        (define factorial
+          (lambda (n acc)
+            (if (= n 0)
+                acc
+                (factorial (- n 1) (* n acc)))))
+        "#,
+        &env,
+    );
+
     println!("--- Factorial (Simple Recursion) ---");
     for n in [5, 10, 15, 20] {
-        let fact_program = format!(
-            r#"((lambda (fact) (fact fact {} 1))
-                (lambda (self n acc)
-                  (if (= n 0)
-                      acc
-                      (self self (- n 1) (* n acc)))))"#,
-            n
-        );
-        if let Ok(duration) = benchmark_single(&format!("factorial({})", n), &fact_program, &env) {
+        if let Ok(duration) = benchmark_single(
+            &format!("factorial({})", n),
+            &format!("(factorial {} 1)", n),
+            &env,
+        ) {
             println!("    Duration: {}", format_duration(duration));
         }
     }
     println!();
 
     // Ackermann function (complex recursion)
+    let _ = eval_str_multiple(
+        r#"
+        (define ackermann
+          (lambda (m n)
+            (if (= m 0)
+                (+ n 1)
+                (if (= n 0)
+                    (ackermann (- m 1) 1)
+                    (ackermann (- m 1) (ackermann m (- n 1)))))))
+        "#,
+        &env,
+    );
+
     println!("--- Ackermann Function (Complex Recursion) ---");
     for (m, n) in [(1, 2), (2, 2), (2, 3), (3, 2), (3, 3)] {
-        let ack_program = format!(
-            r#"((lambda (ack) (ack ack {} {}))
-                (lambda (self m n)
-                  (if (= m 0)
-                      (+ n 1)
-                      (if (= n 0)
-                          (self self (- m 1) 1)
-                          (self self (- m 1) (self self m (- n 1)))))))"#,
-            m, n
-        );
-        if let Ok(duration) = benchmark_single(&format!("ack({}, {})", m, n), &ack_program, &env) {
+        if let Ok(duration) = benchmark_single(
+            &format!("ack({}, {})", m, n),
+            &format!("(ackermann {} {})", m, n),
+            &env,
+        ) {
             println!("    Duration: {}", format_duration(duration));
         }
     }
     println!();
 
     // Sum list (linear recursion)
-    let sum_list_program = r#"
-        ((lambda (sum-list)
-           (sum-list sum-list '(1 2 3 4 5) 0))
-         (lambda (self lst acc)
-           (if (null? lst)
-               acc
-               (self self (cdr lst) (+ acc (car lst))))))
-    "#;
-    benchmark_expression("sum-list '(1 2 3 4 5)", sum_list_program, &env, 10000);
+    let _ = eval_str_multiple(
+        r#"
+        (define sum-list
+          (lambda (lst acc)
+            (if (null? lst)
+                acc
+                (sum-list (cdr lst) (+ acc (car lst))))))
+        "#,
+        &env,
+    );
+    benchmark_expression(
+        "sum-list '(1 2 3 4 5)",
+        "(sum-list '(1 2 3 4 5) 0)",
+        &env,
+        10000,
+    );
 
     // ========================================================================
     // SECTION 7: Tail Call Optimization
@@ -293,99 +325,124 @@ fn main() {
     println!("└─────────────────────────────────────────────────────────────┘\n");
 
     // Tail-recursive countdown
+    let _ = eval_str_multiple(
+        r#"
+        (define countdown
+          (lambda (n acc)
+            (if (= n 0)
+                acc
+                (countdown (- n 1) (+ acc 1)))))
+        "#,
+        &env,
+    );
+
     println!("--- Countdown (Tail Recursion) ---");
     for size in [1000, 10000, 100000, 500000] {
-        let countdown_program = format!(
-            r#"((lambda (countdown) (countdown countdown {} 0))
-                (lambda (self n acc)
-                  (if (= n 0)
-                      acc
-                      (self self (- n 1) (+ acc 1)))))"#,
-            size
-        );
-        if let Ok(duration) =
-            benchmark_single(&format!("countdown({})", size), &countdown_program, &env)
-        {
+        if let Ok(duration) = benchmark_single(
+            &format!("countdown({})", size),
+            &format!("(countdown {} 0)", size),
+            &env,
+        ) {
             println!("    Duration: {}", format_duration(duration));
         }
     }
     println!();
 
-    // Tail-recursive factorial
+    // Tail-recursive factorial (already defined above)
     println!("--- Tail-Recursive Factorial ---");
     for n in [10, 20] {
-        let fact_tail_program = format!(
-            r#"((lambda (factorial-tail) (factorial-tail factorial-tail {} 1))
-                (lambda (self n acc)
-                  (if (= n 0)
-                      acc
-                      (self self (- n 1) (* n acc)))))"#,
-            n
-        );
-        if let Ok(duration) =
-            benchmark_single(&format!("factorial-tail({})", n), &fact_tail_program, &env)
-        {
+        if let Ok(duration) = benchmark_single(
+            &format!("factorial-tail({})", n),
+            &format!("(factorial {} 1)", n),
+            &env,
+        ) {
             println!("    Duration: {}", format_duration(duration));
         }
     }
     println!();
 
     // Tail-recursive sum
+    let _ = eval_str_multiple(
+        r#"
+        (define sum-tail
+          (lambda (n acc)
+            (if (= n 0)
+                acc
+                (sum-tail (- n 1) (+ acc n)))))
+        "#,
+        &env,
+    );
+
     println!("--- Sum with Tail Recursion ---");
     for n in [100, 1000, 10000, 50000] {
-        let sum_tail_program = format!(
-            r#"((lambda (sum-tail) (sum-tail sum-tail {} 0))
-                (lambda (self n acc)
-                  (if (= n 0)
-                      acc
-                      (self self (- n 1) (+ acc n)))))"#,
-            n
-        );
-        if let Ok(duration) = benchmark_single(&format!("sum-tail({})", n), &sum_tail_program, &env)
-        {
+        if let Ok(duration) = benchmark_single(
+            &format!("sum-tail({})", n),
+            &format!("(sum-tail {} 0)", n),
+            &env,
+        ) {
             println!("    Duration: {}", format_duration(duration));
         }
     }
     println!();
 
     // ========================================================================
-    // SECTION 8: Higher-Order Functions (using self-application)
+    // SECTION 8: Higher-Order Functions
     // ========================================================================
     println!("┌─────────────────────────────────────────────────────────────┐");
     println!("│ 8. HIGHER-ORDER FUNCTIONS                                   │");
     println!("└─────────────────────────────────────────────────────────────┘\n");
 
     // Map function
-    let map_program = r#"
-        ((lambda (map)
-           (map map (lambda (x) (* x x)) '(1 2 3 4 5)))
-         (lambda (self f lst)
-           (if (null? lst)
-               nil
-               (cons (f (car lst)) (self self f (cdr lst))))))
-    "#;
-    benchmark_expression("map square '(1 2 3 4 5)", map_program, &env, 10000);
+    let _ = eval_str_multiple(
+        r#"
+        (define map
+          (lambda (f lst)
+            (if (null? lst)
+                nil
+                (cons (f (car lst)) (map f (cdr lst))))))
+        "#,
+        &env,
+    );
+    benchmark_expression(
+        "map square '(1 2 3 4 5)",
+        "(map (lambda (x) (* x x)) '(1 2 3 4 5))",
+        &env,
+        10000,
+    );
 
     // Filter function
-    let filter_program = r#"
-        ((lambda (filter)
-           (filter filter (lambda (x) (> x 0)) '(-3 -1 0 1 2 3)))
-         (lambda (self pred lst)
-           (if (null? lst)
-               nil
-               (if (pred (car lst))
-                   (cons (car lst) (self self pred (cdr lst)))
-                   (self self pred (cdr lst))))))
-    "#;
-    benchmark_expression("filter positive?", filter_program, &env, 10000);
+    let _ = eval_str_multiple(
+        r#"
+        (define filter
+          (lambda (pred lst)
+            (if (null? lst)
+                nil
+                (if (pred (car lst))
+                    (cons (car lst) (filter pred (cdr lst)))
+                    (filter pred (cdr lst))))))
+        "#,
+        &env,
+    );
+    benchmark_expression(
+        "filter positive?",
+        "(filter (lambda (x) (> x 0)) '(-3 -1 0 1 2 3))",
+        &env,
+        10000,
+    );
 
     // Compose function
-    let compose_program = r#"
-        ((lambda (compose)
-           ((compose (lambda (x) (+ x 1)) (lambda (x) (* x x))) 5))
-         (lambda (f g) (lambda (x) (f (g x)))))
-    "#;
-    benchmark_expression("composed function", compose_program, &env, 50000);
+    let _ = eval_str_multiple(
+        r#"
+        (define compose
+          (lambda (f g)
+            (lambda (x) (f (g x)))))
+        (define add1 (lambda (x) (+ x 1)))
+        (define square (lambda (x) (* x x)))
+        (define composed (compose add1 square))
+        "#,
+        &env,
+    );
+    benchmark_expression("composed function", "(composed 5)", &env, 50000);
 
     // ========================================================================
     // SECTION 9: Complex Data Structures
@@ -395,20 +452,24 @@ fn main() {
     println!("└─────────────────────────────────────────────────────────────┘\n");
 
     // Build large list
+    let _ = eval_str_multiple(
+        r#"
+        (define build-list
+          (lambda (n acc)
+            (if (= n 0)
+                acc
+                (build-list (- n 1) (cons n acc)))))
+        "#,
+        &env,
+    );
+
     println!("--- Building Large Lists ---");
     for size in [10, 50, 100, 500] {
-        let build_list_program = format!(
-            r#"((lambda (build-list)
-                  (length (build-list build-list {} nil)))
-                (lambda (self n acc)
-                  (if (= n 0)
-                      acc
-                      (self self (- n 1) (cons n acc)))))"#,
-            size
-        );
-        if let Ok(duration) =
-            benchmark_single(&format!("build-list({})", size), &build_list_program, &env)
-        {
+        if let Ok(duration) = benchmark_single(
+            &format!("build-list({})", size),
+            &format!("(length (build-list {} nil))", size),
+            &env,
+        ) {
             println!("    Duration: {}", format_duration(duration));
         }
     }
@@ -430,21 +491,30 @@ fn main() {
     println!("│ 10. MUTUAL RECURSION                                        │");
     println!("└─────────────────────────────────────────────────────────────┘\n");
 
+    let _ = eval_str_multiple(
+        r#"
+        (define is-even
+          (lambda (n)
+            (if (= n 0)
+                #t
+                (is-odd (- n 1)))))
+        
+        (define is-odd
+          (lambda (n)
+            (if (= n 0)
+                #f
+                (is-even (- n 1)))))
+        "#,
+        &env,
+    );
+
     println!("--- Even/Odd Test ---");
     for n in [10, 100, 1000, 5000] {
-        let even_odd_program = format!(
-            r#"((lambda (make-even-odd)
-                  ((car (make-even-odd make-even-odd)) {}))
-                (lambda (self)
-                  (cons
-                    (lambda (n)
-                      (if (= n 0) #t ((cdr (self self)) (- n 1))))
-                    (lambda (n)
-                      (if (= n 0) #f ((car (self self)) (- n 1)))))))"#,
-            n
-        );
-        if let Ok(duration) = benchmark_single(&format!("is-even({})", n), &even_odd_program, &env)
-        {
+        if let Ok(duration) = benchmark_single(
+            &format!("is-even({})", n),
+            &format!("(is-even {})", n),
+            &env,
+        ) {
             println!("    Duration: {}", format_duration(duration));
         }
     }
@@ -476,28 +546,37 @@ fn main() {
     println!("└─────────────────────────────────────────────────────────────┘\n");
 
     // Range function
-    let range_program = r#"
-        ((lambda (range)
-           (reverse (range range 1 10 nil)))
-         (lambda (self start end acc)
-           (if (> start end)
-               acc
-               (range range (+ start 1) end (cons start acc)))))
-    "#;
-    benchmark_expression("range 1 10", range_program, &env, 10000);
+    let _ = eval_str_multiple(
+        r#"
+        (define range
+          (lambda (start end acc)
+            (if (> start end)
+                acc
+                (range (+ start 1) end (cons start acc)))))
+        "#,
+        &env,
+    );
+    benchmark_expression("range 1 10", "(reverse (range 1 10 nil))", &env, 10000);
 
     // Take first n elements
-    let take_program = r#"
-        ((lambda (take)
-           (take take 5 '(1 2 3 4 5 6 7 8 9 10)))
-         (lambda (self n lst)
-           (if (= n 0)
-               nil
-               (if (null? lst)
-                   nil
-                   (cons (car lst) (take take (- n 1) (cdr lst)))))))
-    "#;
-    benchmark_expression("take 5 from list", take_program, &env, 10000);
+    let _ = eval_str_multiple(
+        r#"
+        (define take
+          (lambda (n lst)
+            (if (= n 0)
+                nil
+                (if (null? lst)
+                    nil
+                    (cons (car lst) (take (- n 1) (cdr lst)))))))
+        "#,
+        &env,
+    );
+    benchmark_expression(
+        "take 5 from list",
+        "(take 5 '(1 2 3 4 5 6 7 8 9 10))",
+        &env,
+        10000,
+    );
 
     // ========================================================================
     // SECTION 13: Performance Scaling Analysis
@@ -512,16 +591,8 @@ fn main() {
 
     let mut last_duration = 0u128;
     for n in [5, 10, 15, 20, 23] {
-        let fib_program = format!(
-            r#"((lambda (fib) (fib fib {})) 
-                (lambda (self n) 
-                  (if (< n 2) 
-                      n 
-                      (+ (self self (- n 1)) (self self (- n 2))))))"#,
-            n
-        );
         let start = Instant::now();
-        let _ = eval_str(&fib_program, &env);
+        let _ = eval_str(&format!("(fib {})", n), &env);
         let duration = start.elapsed().as_nanos();
 
         let growth = if last_duration > 0 {
@@ -547,16 +618,8 @@ fn main() {
 
     last_duration = 0;
     for n in [1000, 10000, 50000, 100000] {
-        let countdown_program = format!(
-            r#"((lambda (countdown) (countdown countdown {} 0))
-                (lambda (self n acc)
-                  (if (= n 0)
-                      acc
-                      (self self (- n 1) (+ acc 1)))))"#,
-            n
-        );
         let start = Instant::now();
-        let _ = eval_str(&countdown_program, &env);
+        let _ = eval_str(&format!("(countdown {} 0)", n), &env);
         let duration = start.elapsed().as_nanos();
 
         let growth = if last_duration > 0 {
@@ -586,15 +649,7 @@ fn main() {
     println!("--- Repeated Large Allocations ---");
     let start = Instant::now();
     for _ in 0..100 {
-        let build_list_program = r#"
-            ((lambda (build-list)
-               (build-list build-list 100 nil))
-             (lambda (self n acc)
-               (if (= n 0)
-                   acc
-                   (self self (- n 1) (cons n acc)))))
-        "#;
-        let _ = eval_str(build_list_program, &env);
+        let _ = eval_str("(build-list 100 nil)", &env);
     }
     let duration = start.elapsed();
     println!(
@@ -623,9 +678,9 @@ fn main() {
 
     println!("\nKey Observations:");
     println!("  • Tail call optimization enables deep recursion");
-    println!("  • Higher-order functions work with self-application pattern");
+    println!("  • Higher-order functions work efficiently with define");
     println!("  • Memory allocation patterns are stable");
     println!("  • Closure creation is efficient");
     println!("  • Expression evaluation scales predictably");
-    println!("  • No 'define' support - using self-application patterns");
+    println!("  • Define makes code much cleaner than self-application");
 }

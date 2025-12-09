@@ -2,10 +2,11 @@
 
 extern crate alloc;
 use alloc::rc::Rc;
+use core::cell::RefCell;
 use core::ops::Deref;
 
 // ============================================================================
-// Optimized Value Type - Environments are now pure cons lists
+// Optimized Value Type - Everything is cons cells!
 // ============================================================================
 
 pub type BuiltinFn = fn(&ValRef) -> Result<ValRef, ValRef>;
@@ -16,12 +17,12 @@ pub enum Value {
     Symbol(ValRef), // String as cons list of chars
     Bool(bool),
     Char(char),
-    Cons(ValRef, ValRef),
+    Cons(Rc<RefCell<(ValRef, ValRef)>>), // Unified cons cell - always mutable
     Builtin(BuiltinFn),
     Lambda {
         params: ValRef,
         body: ValRef,
-        env: ValRef, // Now just a ValRef instead of EnvRef
+        env: ValRef, // Environment is just a ValRef (cons list)
     },
     Nil,
 }
@@ -34,7 +35,7 @@ impl core::fmt::Debug for Value {
             Value::Symbol(_) => write!(f, "Symbol(...)"),
             Value::Bool(b) => write!(f, "Bool({:?})", b),
             Value::Char(c) => write!(f, "Char({:?})", c),
-            Value::Cons(car, cdr) => write!(f, "Cons({:?}, {:?})", car, cdr),
+            Value::Cons(_) => write!(f, "Cons(...)"),
             Value::Builtin(_) => write!(f, "Builtin(<fn>)"),
             Value::Lambda { .. } => write!(f, "Lambda(<fn>)"),
             Value::Nil => write!(f, "Nil"),
@@ -48,7 +49,7 @@ impl core::fmt::Debug for Value {
 
 pub enum EvalResult {
     Done(ValRef),
-    TailCall(ValRef, ValRef), // expr, env (both ValRef now)
+    TailCall(ValRef, ValRef), // expr, env (both ValRef)
 }
 
 // ============================================================================
@@ -92,7 +93,7 @@ impl ValRef {
     }
 
     pub fn cons(car: ValRef, cdr: ValRef) -> Self {
-        Self::new(Value::Cons(car, cdr))
+        Self::new(Value::Cons(Rc::new(RefCell::new((car, cdr)))))
     }
 
     pub fn builtin(f: BuiltinFn) -> Self {
@@ -109,10 +110,10 @@ impl ValRef {
 
     pub fn to_str_buf<'a>(&self, buf: &'a mut [u8]) -> Result<&'a str, ()> {
         let mut idx = 0;
-        let mut current = self.as_ref();
+        let mut current = self.clone();
 
         loop {
-            match current {
+            match current.as_ref() {
                 Value::Char(ch) => {
                     let mut char_buf = [0u8; 4];
                     let char_str = ch.encode_utf8(&mut char_buf);
@@ -128,7 +129,8 @@ impl ValRef {
                     }
                     break;
                 }
-                Value::Cons(car, cdr) => {
+                Value::Cons(cell) => {
+                    let (car, cdr) = cell.borrow().clone();
                     if let Value::Char(ch) = car.as_ref() {
                         let mut char_buf = [0u8; 4];
                         let char_str = ch.encode_utf8(&mut char_buf);
@@ -142,7 +144,7 @@ impl ValRef {
                             buf[idx] = byte;
                             idx += 1;
                         }
-                        current = cdr.as_ref();
+                        current = cdr;
                     } else {
                         return Err(());
                     }
@@ -156,18 +158,20 @@ impl ValRef {
     }
 
     pub fn str_eq(&self, other: &ValRef) -> bool {
-        let mut cur1 = self.as_ref();
-        let mut cur2 = other.as_ref();
+        let mut cur1 = self.clone();
+        let mut cur2 = other.clone();
 
         loop {
-            match (cur1, cur2) {
-                (Value::Cons(c1, r1), Value::Cons(c2, r2)) => {
+            match (cur1.as_ref(), cur2.as_ref()) {
+                (Value::Cons(cell1), Value::Cons(cell2)) => {
+                    let (c1, r1) = cell1.borrow().clone();
+                    let (c2, r2) = cell2.borrow().clone();
                     if let (Value::Char(ch1), Value::Char(ch2)) = (c1.as_ref(), c2.as_ref()) {
                         if ch1 != ch2 {
                             return false;
                         }
-                        cur1 = r1.as_ref();
-                        cur2 = r2.as_ref();
+                        cur1 = r1;
+                        cur2 = r2;
                     } else {
                         return false;
                     }
@@ -213,7 +217,7 @@ impl Value {
             Value::Symbol(_) => "symbol",
             Value::Bool(_) => "bool",
             Value::Char(_) => "char",
-            Value::Cons(_, _) => "cons",
+            Value::Cons(_) => "cons",
             Value::Builtin(_) => "builtin",
             Value::Lambda { .. } => "lambda",
             Value::Nil => "nil",
@@ -248,9 +252,9 @@ impl Value {
         }
     }
 
-    pub fn as_cons(&self) -> Option<(&ValRef, &ValRef)> {
+    pub fn as_cons(&self) -> Option<&Rc<RefCell<(ValRef, ValRef)>>> {
         match self {
-            Value::Cons(car, cdr) => Some((car, cdr)),
+            Value::Cons(cell) => Some(cell),
             _ => None,
         }
     }
@@ -353,7 +357,7 @@ impl Value {
                 }
                 core::str::from_utf8(&buf[..bytes.len()]).map_err(|_| ())
             }
-            Value::Cons(_, _) => self.list_to_display_str(buf),
+            Value::Cons(_) => self.list_to_display_str(buf),
             Value::Builtin(_) => {
                 let s = "<builtin>";
                 let bytes = s.as_bytes();
@@ -398,12 +402,13 @@ impl Value {
         buf[idx] = b'(';
         idx += 1;
 
-        let mut current = self;
+        let mut current = ValRef::new(self.clone());
         let mut first = true;
 
         loop {
-            match current {
-                Value::Cons(car, cdr) => {
+            match current.as_ref() {
+                Value::Cons(cell) => {
+                    let (car, cdr) = cell.borrow().clone();
                     if !first {
                         if idx >= buf.len() {
                             return Err(());
@@ -417,7 +422,7 @@ impl Value {
                     let item_len = item_str.len();
                     idx += item_len;
 
-                    current = cdr.as_ref();
+                    current = cdr;
                 }
                 Value::Nil => break,
                 _ => {
@@ -433,7 +438,7 @@ impl Value {
                         idx += 1;
                     }
 
-                    let item_str = current.to_display_str(&mut buf[idx..])?;
+                    let item_str = current.as_ref().to_display_str(&mut buf[idx..])?;
                     let item_len = item_str.len();
                     idx += item_len;
                     break;
@@ -452,13 +457,14 @@ impl Value {
 
     fn list_len(&self) -> usize {
         let mut count = 0;
-        let mut current = self;
+        let mut current = ValRef::new(self.clone());
 
         loop {
-            match current {
-                Value::Cons(_, cdr) => {
+            match current.as_ref() {
+                Value::Cons(cell) => {
                     count += 1;
-                    current = cdr.as_ref();
+                    let (_, cdr) = cell.borrow().clone();
+                    current = cdr;
                 }
                 Value::Nil => break,
                 _ => break,
@@ -469,17 +475,18 @@ impl Value {
     }
 
     fn list_nth(&self, n: usize) -> Option<ValRef> {
-        let mut current = self;
+        let mut current = ValRef::new(self.clone());
         let mut idx = 0;
 
         loop {
-            match current {
-                Value::Cons(car, cdr) => {
+            match current.as_ref() {
+                Value::Cons(cell) => {
+                    let (car, cdr) = cell.borrow().clone();
                     if idx == n {
-                        return Some(car.clone());
+                        return Some(car);
                     }
                     idx += 1;
-                    current = cdr.as_ref();
+                    current = cdr;
                 }
                 _ => return None,
             }
@@ -488,16 +495,16 @@ impl Value {
 }
 
 // ============================================================================
-// Environment Operations - Pure cons list manipulation
+// Environment Operations - Mutable cons list manipulation
 // ============================================================================
 
 /// Environment structure:
-/// ((binding1 . binding2 . ...) . parent_env)
-/// where each binding is (symbol . value)
+/// Cons((bindings . parent_env))
+/// where bindings is a cons list of (symbol . value) pairs
 
 fn env_new() -> ValRef {
-    let mut env = ValRef::cons(ValRef::nil(), ValRef::nil());
-    env = register_builtins(env);
+    let env = ValRef::cons(ValRef::nil(), ValRef::nil());
+    register_builtins(&env);
     env
 }
 
@@ -505,34 +512,36 @@ fn env_with_parent(parent: ValRef) -> ValRef {
     ValRef::cons(ValRef::nil(), parent)
 }
 
-fn env_set(env: ValRef, name: ValRef, value: ValRef) -> ValRef {
-    // env is ((bindings...) . parent)
-    match env.as_ref() {
-        Value::Cons(bindings, parent) => {
-            let new_binding = ValRef::cons(ValRef::symbol(name), value);
-            let new_bindings = ValRef::cons(new_binding, bindings.clone());
-            ValRef::cons(new_bindings, parent.clone())
-        }
-        _ => env, // Should not happen
+fn env_set(env: &ValRef, name: ValRef, value: ValRef) {
+    // env is Cons(bindings, parent)
+    if let Some(cell) = env.as_cons() {
+        let (bindings, parent) = cell.borrow().clone();
+        let new_binding = ValRef::cons(ValRef::symbol(name), value);
+        let new_bindings = ValRef::cons(new_binding, bindings);
+        *cell.borrow_mut() = (new_bindings, parent);
     }
 }
 
 fn env_get(env: &ValRef, name: &ValRef) -> Option<ValRef> {
     match env.as_ref() {
-        Value::Cons(bindings, parent) => {
+        Value::Cons(cell) => {
+            let (bindings, parent) = cell.borrow().clone();
+
             // Search in current bindings
-            let mut current = bindings.as_ref();
+            let mut current = bindings;
             loop {
-                match current {
-                    Value::Cons(binding, rest) => {
-                        if let Value::Cons(key, value) = binding.as_ref() {
+                match current.as_ref() {
+                    Value::Cons(binding_cell) => {
+                        let (binding, rest) = binding_cell.borrow().clone();
+                        if let Value::Cons(key_value_cell) = binding.as_ref() {
+                            let (key, value) = key_value_cell.borrow().clone();
                             if let Value::Symbol(s) = key.as_ref() {
                                 if s.str_eq(name) {
-                                    return Some(value.clone());
+                                    return Some(value);
                                 }
                             }
                         }
-                        current = rest.as_ref();
+                        current = rest;
                     }
                     Value::Nil => break,
                     _ => break,
@@ -541,7 +550,7 @@ fn env_get(env: &ValRef, name: &ValRef) -> Option<ValRef> {
 
             // Search in parent
             if !parent.is_nil() {
-                env_get(parent, name)
+                env_get(&parent, name)
             } else {
                 None
             }
@@ -550,45 +559,44 @@ fn env_get(env: &ValRef, name: &ValRef) -> Option<ValRef> {
     }
 }
 
-fn register_builtins(env: ValRef) -> ValRef {
-    let env = env_set(env, ValRef::new_str("nil"), ValRef::nil());
-    let env = env_set(env, ValRef::new_str("+"), ValRef::builtin(builtin_add));
-    let env = env_set(env, ValRef::new_str("-"), ValRef::builtin(builtin_sub));
-    let env = env_set(env, ValRef::new_str("*"), ValRef::builtin(builtin_mul));
-    let env = env_set(env, ValRef::new_str("/"), ValRef::builtin(builtin_div));
-    let env = env_set(env, ValRef::new_str("="), ValRef::builtin(builtin_eq));
-    let env = env_set(env, ValRef::new_str("<"), ValRef::builtin(builtin_lt));
-    let env = env_set(env, ValRef::new_str(">"), ValRef::builtin(builtin_gt));
-    let env = env_set(env, ValRef::new_str("list"), ValRef::builtin(builtin_list));
-    let env = env_set(env, ValRef::new_str("car"), ValRef::builtin(builtin_car));
-    let env = env_set(env, ValRef::new_str("cdr"), ValRef::builtin(builtin_cdr));
-    let env = env_set(
+fn register_builtins(env: &ValRef) {
+    env_set(env, ValRef::new_str("nil"), ValRef::nil());
+    env_set(env, ValRef::new_str("+"), ValRef::builtin(builtin_add));
+    env_set(env, ValRef::new_str("-"), ValRef::builtin(builtin_sub));
+    env_set(env, ValRef::new_str("*"), ValRef::builtin(builtin_mul));
+    env_set(env, ValRef::new_str("/"), ValRef::builtin(builtin_div));
+    env_set(env, ValRef::new_str("="), ValRef::builtin(builtin_eq));
+    env_set(env, ValRef::new_str("<"), ValRef::builtin(builtin_lt));
+    env_set(env, ValRef::new_str(">"), ValRef::builtin(builtin_gt));
+    env_set(env, ValRef::new_str("list"), ValRef::builtin(builtin_list));
+    env_set(env, ValRef::new_str("car"), ValRef::builtin(builtin_car));
+    env_set(env, ValRef::new_str("cdr"), ValRef::builtin(builtin_cdr));
+    env_set(
         env,
         ValRef::new_str("cons"),
         ValRef::builtin(builtin_cons_fn),
     );
-    let env = env_set(env, ValRef::new_str("null?"), ValRef::builtin(builtin_null));
-    let env = env_set(
+    env_set(env, ValRef::new_str("null?"), ValRef::builtin(builtin_null));
+    env_set(
         env,
         ValRef::new_str("cons?"),
         ValRef::builtin(builtin_cons_p),
     );
-    let env = env_set(
+    env_set(
         env,
         ValRef::new_str("length"),
         ValRef::builtin(builtin_length),
     );
-    let env = env_set(
+    env_set(
         env,
         ValRef::new_str("append"),
         ValRef::builtin(builtin_append),
     );
-    let env = env_set(
+    env_set(
         env,
         ValRef::new_str("reverse"),
         ValRef::builtin(builtin_reverse),
     );
-    env
 }
 
 // ============================================================================
@@ -699,10 +707,11 @@ fn tokenize(input: &str) -> Result<ValRef, ValRef> {
 
                 let mut buf = [0u8; 128];
                 let mut idx = 0;
-                let mut cur = atom_chars.as_ref();
+                let mut cur = atom_chars;
                 loop {
-                    match cur {
-                        Value::Cons(car, cdr) => {
+                    match cur.as_ref() {
+                        Value::Cons(cell) => {
+                            let (car, cdr) = cell.borrow().clone();
                             if let Value::Char(ch) = car.as_ref() {
                                 let mut char_buf = [0u8; 4];
                                 let s = ch.encode_utf8(&mut char_buf);
@@ -714,7 +723,7 @@ fn tokenize(input: &str) -> Result<ValRef, ValRef> {
                                     idx += 1;
                                 }
                             }
-                            cur = cdr.as_ref();
+                            cur = cdr;
                         }
                         Value::Nil => break,
                         _ => break,
@@ -738,13 +747,14 @@ fn tokenize(input: &str) -> Result<ValRef, ValRef> {
 
 fn reverse_list(list: ValRef) -> ValRef {
     let mut result = ValRef::nil();
-    let mut current = list.as_ref();
+    let mut current = list;
 
     loop {
-        match current {
-            Value::Cons(car, cdr) => {
-                result = ValRef::cons(car.clone(), result);
-                current = cdr.as_ref();
+        match current.as_ref() {
+            Value::Cons(cell) => {
+                let (car, cdr) = cell.borrow().clone();
+                result = ValRef::cons(car, result);
+                current = cdr;
             }
             Value::Nil => break,
             _ => break,
@@ -761,58 +771,62 @@ fn reverse_list(list: ValRef) -> ValRef {
 fn parse_tokens(tokens: ValRef) -> Result<(ValRef, ValRef), ValRef> {
     match tokens.as_ref() {
         Value::Nil => Err(ValRef::new_str("Unexpected end of input")),
-        Value::Cons(first, rest) => match first.as_ref() {
-            Value::Number(_) | Value::Bool(_) => Ok((first.clone(), rest.clone())),
-            Value::Symbol(s) => {
-                let mut buf = [0u8; 32];
-                let s_str = s
-                    .to_str_buf(&mut buf)
-                    .map_err(|_| ValRef::new_str("Symbol too long"))?;
+        Value::Cons(cell) => {
+            let (first, rest) = cell.borrow().clone();
+            match first.as_ref() {
+                Value::Number(_) | Value::Bool(_) => Ok((first, rest)),
+                Value::Symbol(s) => {
+                    let mut buf = [0u8; 32];
+                    let s_str = s
+                        .to_str_buf(&mut buf)
+                        .map_err(|_| ValRef::new_str("Symbol too long"))?;
 
-                if s_str == "'" {
-                    if let Value::Cons(next_expr, remaining) = rest.as_ref() {
-                        let (val, consumed) =
-                            parse_tokens(ValRef::cons(next_expr.clone(), remaining.clone()))?;
-                        let quoted = ValRef::cons(
-                            ValRef::symbol(ValRef::new_str("quote")),
-                            ValRef::cons(val, ValRef::nil()),
-                        );
-                        Ok((quoted, consumed))
-                    } else {
-                        Err(ValRef::new_str("Quote requires an expression"))
-                    }
-                } else if s_str == "(" {
-                    let mut items = ValRef::nil();
-                    let mut pos = rest.clone();
-
-                    loop {
-                        match pos.as_ref() {
-                            Value::Nil => return Err(ValRef::new_str("Unmatched '('")),
-                            Value::Cons(token, rest_tokens) => {
-                                if let Value::Symbol(tok_s) = token.as_ref() {
-                                    let mut tok_buf = [0u8; 32];
-                                    let tok_str = tok_s
-                                        .to_str_buf(&mut tok_buf)
-                                        .map_err(|_| ValRef::new_str("Symbol too long"))?;
-                                    if tok_str == ")" {
-                                        return Ok((reverse_list(items), rest_tokens.clone()));
-                                    }
-                                }
-                                let (val, consumed) = parse_tokens(pos)?;
-                                items = ValRef::cons(val, items);
-                                pos = consumed;
-                            }
-                            _ => return Err(ValRef::new_str("Invalid token stream")),
+                    if s_str == "'" {
+                        if let Value::Cons(next_cell) = rest.as_ref() {
+                            let (next_expr, remaining) = next_cell.borrow().clone();
+                            let (val, consumed) = parse_tokens(ValRef::cons(next_expr, remaining))?;
+                            let quoted = ValRef::cons(
+                                ValRef::symbol(ValRef::new_str("quote")),
+                                ValRef::cons(val, ValRef::nil()),
+                            );
+                            Ok((quoted, consumed))
+                        } else {
+                            Err(ValRef::new_str("Quote requires an expression"))
                         }
+                    } else if s_str == "(" {
+                        let mut items = ValRef::nil();
+                        let mut pos = rest;
+
+                        loop {
+                            match pos.as_ref() {
+                                Value::Nil => return Err(ValRef::new_str("Unmatched '('")),
+                                Value::Cons(token_cell) => {
+                                    let (token, rest_tokens) = token_cell.borrow().clone();
+                                    if let Value::Symbol(tok_s) = token.as_ref() {
+                                        let mut tok_buf = [0u8; 32];
+                                        let tok_str = tok_s
+                                            .to_str_buf(&mut tok_buf)
+                                            .map_err(|_| ValRef::new_str("Symbol too long"))?;
+                                        if tok_str == ")" {
+                                            return Ok((reverse_list(items), rest_tokens));
+                                        }
+                                    }
+                                    let (val, consumed) = parse_tokens(pos)?;
+                                    items = ValRef::cons(val, items);
+                                    pos = consumed;
+                                }
+                                _ => return Err(ValRef::new_str("Invalid token stream")),
+                            }
+                        }
+                    } else if s_str == ")" {
+                        Err(ValRef::new_str("Unexpected ')'"))
+                    } else {
+                        Ok((first, rest))
                     }
-                } else if s_str == ")" {
-                    Err(ValRef::new_str("Unexpected ')'"))
-                } else {
-                    Ok((first.clone(), rest.clone()))
                 }
+                _ => Err(ValRef::new_str("Unexpected token type")),
             }
-            _ => Err(ValRef::new_str("Unexpected token type")),
-        },
+        }
         _ => Err(ValRef::new_str("Invalid token stream")),
     }
 }
@@ -874,7 +888,8 @@ fn eval_step(expr: ValRef, env: &ValRef) -> Result<EvalResult, ValRef> {
                 .map(EvalResult::Done)
                 .ok_or_else(|| ValRef::new_str("Unbound symbol"))
         }
-        Value::Cons(car, cdr) => {
+        Value::Cons(cell) => {
+            let (car, cdr) = cell.borrow().clone();
             if let Value::Symbol(sym) = car.as_ref() {
                 let mut buf = [0u8; 32];
                 let sym_str = sym
@@ -893,14 +908,14 @@ fn eval_step(expr: ValRef, env: &ValRef) -> Result<EvalResult, ValRef> {
                             .ok_or(ValRef::new_str("define missing name"))?;
                         let name = name_val
                             .as_symbol()
-                            .ok_or(ValRef::new_str("define requires symbol as first arg"))?;
+                            .ok_or(ValRef::new_str("define requires symbol as first arg"))?
+                            .clone();
                         let body_val = expr
                             .as_ref()
                             .list_nth(2)
                             .ok_or(ValRef::new_str("define missing body"))?;
                         let val = eval(body_val, env)?;
-                        // Note: define mutates the environment immutably by returning new env
-                        // For now, we'll return the value but can't update env in-place
+                        env_set(env, name, val.clone());
                         return Ok(EvalResult::Done(val));
                     }
                     "lambda" => {
@@ -916,16 +931,17 @@ fn eval_step(expr: ValRef, env: &ValRef) -> Result<EvalResult, ValRef> {
                             .list_nth(1)
                             .ok_or(ValRef::new_str("lambda missing params"))?;
 
-                        let mut current = params_list.as_ref();
+                        let mut current = params_list.clone();
                         loop {
-                            match current {
-                                Value::Cons(param, rest) => {
+                            match current.as_ref() {
+                                Value::Cons(param_cell) => {
+                                    let (param, rest) = param_cell.borrow().clone();
                                     if param.as_symbol().is_none() {
                                         return Err(ValRef::new_str(
                                             "lambda params must be symbols",
                                         ));
                                     }
-                                    current = rest.as_ref();
+                                    current = rest;
                                 }
                                 Value::Nil => break,
                                 _ => return Err(ValRef::new_str("lambda params must be a list")),
@@ -980,16 +996,17 @@ fn eval_step(expr: ValRef, env: &ValRef) -> Result<EvalResult, ValRef> {
                 }
             }
 
-            let func = eval(car.clone(), env)?;
+            let func = eval(car, env)?;
 
             let mut args = ValRef::nil();
-            let mut current = cdr.as_ref();
+            let mut current = cdr;
             loop {
-                match current {
-                    Value::Cons(arg_car, arg_cdr) => {
-                        let evaled = eval(arg_car.clone(), env)?;
+                match current.as_ref() {
+                    Value::Cons(arg_cell) => {
+                        let (arg_car, arg_cdr) = arg_cell.borrow().clone();
+                        let evaled = eval(arg_car, env)?;
                         args = ValRef::cons(evaled, args);
-                        current = arg_cdr.as_ref();
+                        current = arg_cdr;
                     }
                     Value::Nil => break,
                     _ => return Err(ValRef::new_str("Malformed argument list")),
@@ -1011,19 +1028,21 @@ fn eval_step(expr: ValRef, env: &ValRef) -> Result<EvalResult, ValRef> {
                         return Err(ValRef::new_str("Lambda argument count mismatch"));
                     }
 
-                    let mut call_env = env_with_parent(lambda_env.clone());
+                    let call_env = env_with_parent(lambda_env.clone());
 
-                    let mut param_cur = params.as_ref();
-                    let mut arg_cur = args.as_ref();
+                    let mut param_cur = params.clone();
+                    let mut arg_cur = args.clone();
 
                     loop {
-                        match (param_cur, arg_cur) {
-                            (Value::Cons(p_car, p_cdr), Value::Cons(a_car, a_cdr)) => {
+                        match (param_cur.as_ref(), arg_cur.as_ref()) {
+                            (Value::Cons(p_cell), Value::Cons(a_cell)) => {
+                                let (p_car, p_cdr) = p_cell.borrow().clone();
+                                let (a_car, a_cdr) = a_cell.borrow().clone();
                                 if let Value::Symbol(param_name) = p_car.as_ref() {
-                                    call_env = env_set(call_env, param_name.clone(), a_car.clone());
+                                    env_set(&call_env, param_name.clone(), a_car);
                                 }
-                                param_cur = p_cdr.as_ref();
-                                arg_cur = a_cdr.as_ref();
+                                param_cur = p_cdr;
+                                arg_cur = a_cdr;
                             }
                             (Value::Nil, Value::Nil) => break,
                             _ => {
@@ -1061,18 +1080,19 @@ pub fn eval(mut expr: ValRef, env: &ValRef) -> Result<ValRef, ValRef> {
 
 fn builtin_add(args: &ValRef) -> Result<ValRef, ValRef> {
     let mut result: i64 = 0;
-    let mut current = args.as_ref();
+    let mut current = args.clone();
 
     loop {
-        match current {
-            Value::Cons(car, cdr) => {
+        match current.as_ref() {
+            Value::Cons(cell) => {
+                let (car, cdr) = cell.borrow().clone();
                 let num = car
                     .as_number()
                     .ok_or(ValRef::new_str("+ requires numbers"))?;
                 result = result
                     .checked_add(num)
                     .ok_or(ValRef::new_str("Integer overflow"))?;
-                current = cdr.as_ref();
+                current = cdr;
             }
             Value::Nil => break,
             _ => return Err(ValRef::new_str("Invalid argument list")),
@@ -1105,21 +1125,23 @@ fn builtin_sub(args: &ValRef) -> Result<ValRef, ValRef> {
     }
 
     let mut result = first_num;
-    let mut current = args.as_ref();
-    if let Value::Cons(_, rest) = current {
-        current = rest.as_ref();
+    let mut current = args.clone();
+    if let Value::Cons(cell) = current.as_ref() {
+        let (_, rest) = cell.borrow().clone();
+        current = rest;
     }
 
     loop {
-        match current {
-            Value::Cons(car, cdr) => {
+        match current.as_ref() {
+            Value::Cons(cell) => {
+                let (car, cdr) = cell.borrow().clone();
                 let num = car
                     .as_number()
                     .ok_or(ValRef::new_str("- requires numbers"))?;
                 result = result
                     .checked_sub(num)
                     .ok_or(ValRef::new_str("Integer overflow"))?;
-                current = cdr.as_ref();
+                current = cdr;
             }
             Value::Nil => break,
             _ => return Err(ValRef::new_str("Invalid argument list")),
@@ -1131,18 +1153,19 @@ fn builtin_sub(args: &ValRef) -> Result<ValRef, ValRef> {
 
 fn builtin_mul(args: &ValRef) -> Result<ValRef, ValRef> {
     let mut result: i64 = 1;
-    let mut current = args.as_ref();
+    let mut current = args.clone();
 
     loop {
-        match current {
-            Value::Cons(car, cdr) => {
+        match current.as_ref() {
+            Value::Cons(cell) => {
+                let (car, cdr) = cell.borrow().clone();
                 let num = car
                     .as_number()
                     .ok_or(ValRef::new_str("* requires numbers"))?;
                 result = result
                     .checked_mul(num)
                     .ok_or(ValRef::new_str("Integer overflow"))?;
-                current = cdr.as_ref();
+                current = cdr;
             }
             Value::Nil => break,
             _ => return Err(ValRef::new_str("Invalid argument list")),
@@ -1166,14 +1189,16 @@ fn builtin_div(args: &ValRef) -> Result<ValRef, ValRef> {
         .as_number()
         .ok_or(ValRef::new_str("/ requires numbers"))?;
 
-    let mut current = args.as_ref();
-    if let Value::Cons(_, rest) = current {
-        current = rest.as_ref();
+    let mut current = args.clone();
+    if let Value::Cons(cell) = current.as_ref() {
+        let (_, rest) = cell.borrow().clone();
+        current = rest;
     }
 
     loop {
-        match current {
-            Value::Cons(car, cdr) => {
+        match current.as_ref() {
+            Value::Cons(cell) => {
+                let (car, cdr) = cell.borrow().clone();
                 let num = car
                     .as_number()
                     .ok_or(ValRef::new_str("/ requires numbers"))?;
@@ -1183,7 +1208,7 @@ fn builtin_div(args: &ValRef) -> Result<ValRef, ValRef> {
                 result = result
                     .checked_div(num)
                     .ok_or(ValRef::new_str("Integer overflow"))?;
-                current = cdr.as_ref();
+                current = cdr;
             }
             Value::Nil => break,
             _ => return Err(ValRef::new_str("Invalid argument list")),
@@ -1256,10 +1281,11 @@ fn builtin_car(args: &ValRef) -> Result<ValRef, ValRef> {
         .as_ref()
         .list_nth(0)
         .ok_or(ValRef::new_str("car missing argument"))?;
-    let (car, _) = list
+    let cell = list
         .as_cons()
         .ok_or(ValRef::new_str("car requires a cons/list"))?;
-    Ok(car.clone())
+    let (car, _) = cell.borrow().clone();
+    Ok(car)
 }
 
 fn builtin_cdr(args: &ValRef) -> Result<ValRef, ValRef> {
@@ -1270,10 +1296,11 @@ fn builtin_cdr(args: &ValRef) -> Result<ValRef, ValRef> {
         .as_ref()
         .list_nth(0)
         .ok_or(ValRef::new_str("cdr missing argument"))?;
-    let (_, cdr) = list
+    let cell = list
         .as_cons()
         .ok_or(ValRef::new_str("cdr requires a cons/list"))?;
-    Ok(cdr.clone())
+    let (_, cdr) = cell.borrow().clone();
+    Ok(cdr)
 }
 
 fn builtin_cons_fn(args: &ValRef) -> Result<ValRef, ValRef> {
@@ -1327,23 +1354,25 @@ fn builtin_length(args: &ValRef) -> Result<ValRef, ValRef> {
 
 fn builtin_append(args: &ValRef) -> Result<ValRef, ValRef> {
     let mut result = ValRef::nil();
-    let mut current = args.as_ref();
+    let mut current = args.clone();
 
     loop {
-        match current {
-            Value::Cons(list, rest) => {
-                let mut list_cur = list.as_ref();
+        match current.as_ref() {
+            Value::Cons(cell) => {
+                let (list, rest) = cell.borrow().clone();
+                let mut list_cur = list;
                 loop {
-                    match list_cur {
-                        Value::Cons(item, item_rest) => {
-                            result = ValRef::cons(item.clone(), result);
-                            list_cur = item_rest.as_ref();
+                    match list_cur.as_ref() {
+                        Value::Cons(item_cell) => {
+                            let (item, item_rest) = item_cell.borrow().clone();
+                            result = ValRef::cons(item, result);
+                            list_cur = item_rest;
                         }
                         Value::Nil => break,
                         _ => break,
                     }
                 }
-                current = rest.as_ref();
+                current = rest;
             }
             Value::Nil => break,
             _ => return Err(ValRef::new_str("Invalid argument list")),
@@ -1381,13 +1410,14 @@ pub fn eval_str_multiple(input: &str, env: &ValRef) -> Result<ValRef, ValRef> {
     }
 
     let mut last_result = ValRef::nil();
-    let mut current = expressions.as_ref();
+    let mut current = expressions;
 
     loop {
-        match current {
-            Value::Cons(expr, rest) => {
-                last_result = eval(expr.clone(), env)?;
-                current = rest.as_ref();
+        match current.as_ref() {
+            Value::Cons(cell) => {
+                let (expr, rest) = cell.borrow().clone();
+                last_result = eval(expr, env)?;
+                current = rest;
             }
             Value::Nil => break,
             _ => return Err(ValRef::new_str("Invalid expression list")),
@@ -1405,7 +1435,9 @@ impl PartialEq for ValRef {
             (Value::Char(a), Value::Char(b)) => a == b,
             (Value::Symbol(a), Value::Symbol(b)) => a.str_eq(b),
             (Value::Nil, Value::Nil) => true,
-            (Value::Cons(a_car, a_cdr), Value::Cons(b_car, b_cdr)) => {
+            (Value::Cons(a_cell), Value::Cons(b_cell)) => {
+                let (a_car, a_cdr) = a_cell.borrow().clone();
+                let (b_car, b_cdr) = b_cell.borrow().clone();
                 a_car == b_car && a_cdr == b_cdr
             }
             (Value::Builtin(a), Value::Builtin(b)) => core::ptr::eq(a as *const _, b as *const _),
@@ -1413,14 +1445,14 @@ impl PartialEq for ValRef {
                 Value::Lambda {
                     params: p1,
                     body: b1,
-                    env: e1,
+                    env: _,
                 },
                 Value::Lambda {
                     params: p2,
                     body: b2,
-                    env: e2,
+                    env: _,
                 },
-            ) => p1 == p2 && b1 == b2 && e1 == e2,
+            ) => p1 == p2 && b1 == b2,
             _ => false,
         }
     }
