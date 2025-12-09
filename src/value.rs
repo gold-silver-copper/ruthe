@@ -509,3 +509,34 @@ pub fn reverse_list(list: ValRef) -> ValRef {
 
     result
 }
+
+impl PartialEq for ValRef {
+    fn eq(&self, other: &Self) -> bool {
+        match (self.as_ref(), other.as_ref()) {
+            (Value::Number(a), Value::Number(b)) => a == b,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Char(a), Value::Char(b)) => a == b,
+            (Value::Symbol(a), Value::Symbol(b)) => a.str_eq(b),
+            (Value::Nil, Value::Nil) => true,
+            (Value::Cons(a_cell), Value::Cons(b_cell)) => {
+                let (a_car, a_cdr) = a_cell.borrow().clone();
+                let (b_car, b_cdr) = b_cell.borrow().clone();
+                a_car == b_car && a_cdr == b_cdr
+            }
+            (Value::Builtin(a), Value::Builtin(b)) => core::ptr::eq(a as *const _, b as *const _),
+            (
+                Value::Lambda {
+                    params: p1,
+                    body: b1,
+                    env: _,
+                },
+                Value::Lambda {
+                    params: p2,
+                    body: b2,
+                    env: _,
+                },
+            ) => p1 == p2 && b1 == b2,
+            _ => false,
+        }
+    }
+}
