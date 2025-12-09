@@ -1,299 +1,132 @@
    Compiling ruthe v0.1.0 (/Users/kisaczka/Desktop/code/ruthe)
-error[E0597]: `cdr` does not live long enough
-   --> src/lib.rs:147:35
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+   --> src/lib.rs:258:38
     |
-116 |             match current {
-    |                   ------- borrow later used here
+256 |             match self.get(list) {
+    |                   ---- immutable borrow occurs here
+257 |                 Some(Value::Cons(car, cdr)) => {
+258 |                     let new_result = self.cons(*car, result);
+    |                                      ^^^^^^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
 ...
-133 |                     let (car, cdr) = cell.borrow().clone();
-    |                               --- binding `cdr` declared here
-...
-147 |                         current = cdr.as_ref();
-    |                                   ^^^ borrowed value does not live long enough
-...
-151 |                 }
-    |                 - `cdr` dropped here while still borrowed
+261 |                     list = *cdr;
+    |                            ---- immutable borrow later used here
 
-error[E0597]: `r1` does not live long enough
-   --> src/lib.rs:173:32
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+   --> src/lib.rs:259:21
     |
-165 |             match (cur1, cur2) {
-    |                    ---- borrow later used here
-166 |                 (Value::Cons(cell1), Value::Cons(cell2)) => {
-167 |                     let (c1, r1) = cell1.borrow().clone();
-    |                              -- binding `r1` declared here
+256 |             match self.get(list) {
+    |                   ---- immutable borrow occurs here
 ...
-173 |                         cur1 = r1.as_ref();
-    |                                ^^ borrowed value does not live long enough
-...
-178 |                 }
-    |                 - `r1` dropped here while still borrowed
+259 |                     self.decref(result);
+    |                     ^^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+260 |                     result = new_result;
+261 |                     list = *cdr;
+    |                            ---- immutable borrow later used here
 
-error[E0597]: `r2` does not live long enough
-   --> src/lib.rs:174:32
+error[E0499]: cannot borrow `*arena` as mutable more than once at a time
+   --> src/lib.rs:308:26
     |
-165 |             match (cur1, cur2) {
-    |                          ---- borrow later used here
-...
-168 |                     let (c2, r2) = cell2.borrow().clone();
-    |                              -- binding `r2` declared here
-...
-174 |                         cur2 = r2.as_ref();
-    |                                ^^ borrowed value does not live long enough
-...
-178 |                 }
-    |                 - `r2` dropped here while still borrowed
-
-error[E0597]: `rest` does not live long enough
-   --> src/lib.rs:544:35
+308 |     let env = arena.cons(arena.nil(), arena.nil());
+    |               ----- ---- ^^^^^ second mutable borrow occurs here
+    |               |     |
+    |               |     first borrow later used by call
+    |               first mutable borrow occurs here
     |
-533 |                 match current {
-    |                       ------- borrow later used here
-534 |                     Value::Cons(binding_cell) => {
-535 |                         let (binding, rest) = binding_cell.borrow().clone();
-    |                                       ---- binding `rest` declared here
-...
-544 |                         current = rest.as_ref();
-    |                                   ^^^^ borrowed value does not live long enough
-545 |                     }
-    |                     - `rest` dropped here while still borrowed
-
-error[E0597]: `cdr` does not live long enough
-   --> src/lib.rs:726:35
+help: try adding a local storing this argument...
+   --> src/lib.rs:308:26
     |
-712 |                     match cur {
-    |                           --- borrow later used here
-713 |                         Value::Cons(cell) => {
-714 |                             let (car, cdr) = cell.borrow().clone();
-    |                                       --- binding `cdr` declared here
-...
-726 |                             cur = cdr.as_ref();
-    |                                   ^^^ borrowed value does not live long enough
-727 |                         }
-    |                         - `cdr` dropped here while still borrowed
-
-error[E0597]: `cdr` does not live long enough
-   --> src/lib.rs:757:27
+308 |     let env = arena.cons(arena.nil(), arena.nil());
+    |                          ^^^^^^^^^^^
+help: ...and then using that local as the argument to this call
+   --> src/lib.rs:308:15
     |
-753 |         match current {
-    |               ------- borrow later used here
-754 |             Value::Cons(cell) => {
-755 |                 let (car, cdr) = cell.borrow().clone();
-    |                           --- binding `cdr` declared here
-756 |                 result = ValRef::cons(car, result);
-757 |                 current = cdr.as_ref();
-    |                           ^^^ borrowed value does not live long enough
-758 |             }
-    |             - `cdr` dropped here while still borrowed
+308 |     let env = arena.cons(arena.nil(), arena.nil());
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-warning: unreachable pattern
-    --> src/lib.rs:1060:9
-     |
-1060 |         _ => Ok(EvalResult::Done(expr.clone())),
-     |         ^ no value can reach this
-     |
-note: multiple earlier patterns match some of the same values
-    --> src/lib.rs:1060:9
-     |
- 873 | /         Value::Number(_)
- 874 | |         | Value::Bool(_)
- 875 | |         | Value::Char(_)
- 876 | |         | Value::Builtin(_)
- 877 | |         | Value::Lambda { .. } => Ok(EvalResult::Done(expr.clone())),
-     | |______________________________- matches some of the same values
- 878 |           Value::Symbol(s) => {
-     |           ---------------- matches some of the same values
-...
- 891 |           Value::Cons(cell) => {
-     |           ----------------- matches some of the same values
-...
-1059 |           Value::Nil => Ok(EvalResult::Done(ValRef::nil())),
-     |           ---------- matches some of the same values
-1060 |           _ => Ok(EvalResult::Done(expr.clone())),
-     |           ^ collectively making this unreachable
-     = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
-
-error[E0597]: `rest` does not live long enough
-   --> src/lib.rs:944:47
+error[E0499]: cannot borrow `*arena` as mutable more than once at a time
+   --> src/lib.rs:308:39
     |
-936 | ...                   match current {
-    |                             ------- borrow later used here
-937 | ...                       Value::Cons(param_cell) => {
-938 | ...                           let (param, rest) = param_cell.borrow().clone();
-    |                                           ---- binding `rest` declared here
-...
-944 | ...                           current = rest.as_ref();
-    |                                         ^^^^ borrowed value does not live long enough
-945 | ...                       }
-    |                           - `rest` dropped here while still borrowed
+308 |     let env = arena.cons(arena.nil(), arena.nil());
+    |               ----- ----              ^^^^^ second mutable borrow occurs here
+    |               |     |
+    |               |     first borrow later used by call
+    |               first mutable borrow occurs here
+    |
+help: try adding a local storing this argument...
+   --> src/lib.rs:308:39
+    |
+308 |     let env = arena.cons(arena.nil(), arena.nil());
+    |                                       ^^^^^^^^^^^
+help: ...and then using that local as the argument to this call
+   --> src/lib.rs:308:15
+    |
+308 |     let env = arena.cons(arena.nil(), arena.nil());
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error[E0597]: `arg_cdr` does not live long enough
-    --> src/lib.rs:1009:35
+error[E0499]: cannot borrow `*arena` as mutable more than once at a time
+   --> src/lib.rs:314:16
+    |
+314 |     arena.cons(arena.nil(), parent)
+    |     ----- ---- ^^^^^ second mutable borrow occurs here
+    |     |     |
+    |     |     first borrow later used by call
+    |     first mutable borrow occurs here
+    |
+help: try adding a local storing this argument...
+   --> src/lib.rs:314:16
+    |
+314 |     arena.cons(arena.nil(), parent)
+    |                ^^^^^^^^^^^
+help: ...and then using that local as the argument to this call
+   --> src/lib.rs:314:5
+    |
+314 |     arena.cons(arena.nil(), parent)
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0499]: cannot borrow `*arena` as mutable more than once at a time
+   --> src/lib.rs:842:53
+    |
+842 |                         let list = arena.cons(expr, arena.nil());
+    |                                    ----- ----       ^^^^^ second mutable borrow occurs here
+    |                                    |     |
+    |                                    |     first borrow later used by call
+    |                                    first mutable borrow occurs here
+    |
+help: try adding a local storing this argument...
+   --> src/lib.rs:842:53
+    |
+842 |                         let list = arena.cons(expr, arena.nil());
+    |                                                     ^^^^^^^^^^^
+help: ...and then using that local as the argument to this call
+   --> src/lib.rs:842:36
+    |
+842 |                         let list = arena.cons(expr, arena.nil());
+    |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `env`
+    --> src/lib.rs:1060:5
      |
-1004 |                 match current {
-     |                       ------- borrow later used here
-1005 |                     Value::Cons(arg_cell) => {
-1006 |                         let (arg_car, arg_cdr) = arg_cell.borrow().clone();
-     |                                       ------- binding `arg_cdr` declared here
-...
-1009 |                         current = arg_cdr.as_ref();
-     |                                   ^^^^^^^ borrowed value does not live long enough
-1010 |                     }
-     |                     - `arg_cdr` dropped here while still borrowed
-
-error[E0597]: `p_cdr` does not live long enough
-    --> src/lib.rs:1044:45
+1060 |     env: ArenaRef,
+     |     ^^^ help: if this is intentional, prefix it with an underscore: `_env`
      |
-1037 |                         match (param_cur, arg_cur) {
-     |                                --------- borrow later used here
-1038 |                             (Value::Cons(p_cell), Value::Cons(a_cell)) => {
-1039 |                                 let (p_car, p_cdr) = p_cell.borrow().clone();
-     |                                             ----- binding `p_cdr` declared here
-...
-1044 |                                 param_cur = p_cdr.as_ref();
-     |                                             ^^^^^ borrowed value does not live long enough
-1045 |                                 arg_cur = a_cdr.as_ref();
-1046 |                             }
-     |                             - `p_cdr` dropped here while still borrowed
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
-error[E0597]: `a_cdr` does not live long enough
-    --> src/lib.rs:1045:43
+warning: unused variable: `n`
+    --> src/lib.rs:1119:35
      |
-1037 |                         match (param_cur, arg_cur) {
-     |                                           ------- borrow later used here
-...
-1040 |                                 let (a_car, a_cdr) = a_cell.borrow().clone();
-     |                                             ----- binding `a_cdr` declared here
-...
-1045 |                                 arg_cur = a_cdr.as_ref();
-     |                                           ^^^^^ borrowed value does not live long enough
-1046 |                             }
-     |                             - `a_cdr` dropped here while still borrowed
+1119 |         if let Some(Value::Number(n)) = arena.get(val) {
+     |                                   ^ help: if this is intentional, prefix it with an underscore: `_n`
 
-error[E0597]: `cdr` does not live long enough
-    --> src/lib.rs:1096:27
+warning: unused variable: `n`
+    --> src/lib.rs:1131:35
      |
-1087 |         match current {
-     |               ------- borrow later used here
-1088 |             Value::Cons(cell) => {
-1089 |                 let (car, cdr) = cell.borrow().clone();
-     |                           --- binding `cdr` declared here
-...
-1096 |                 current = cdr.as_ref();
-     |                           ^^^ borrowed value does not live long enough
-1097 |             }
-     |             - `cdr` dropped here while still borrowed
+1131 |         if let Some(Value::Number(n)) = arena.get(val) {
+     |                                   ^ help: if this is intentional, prefix it with an underscore: `_n`
 
-error[E0597]: `rest` does not live long enough
-    --> src/lib.rs:1132:19
-     |
-1131 |         let (_, rest) = cell.borrow().clone();
-     |                 ---- binding `rest` declared here
-1132 |         current = rest.as_ref();
-     |                   ^^^^ borrowed value does not live long enough
-1133 |     }
-     |     - `rest` dropped here while still borrowed
-...
-1136 |         match current {
-     |               ------- borrow later used here
-
-error[E0597]: `cdr` does not live long enough
-    --> src/lib.rs:1145:27
-     |
-1136 |         match current {
-     |               ------- borrow later used here
-1137 |             Value::Cons(cell) => {
-1138 |                 let (car, cdr) = cell.borrow().clone();
-     |                           --- binding `cdr` declared here
-...
-1145 |                 current = cdr.as_ref();
-     |                           ^^^ borrowed value does not live long enough
-1146 |             }
-     |             - `cdr` dropped here while still borrowed
-
-error[E0597]: `cdr` does not live long enough
-    --> src/lib.rs:1169:27
-     |
-1160 |         match current {
-     |               ------- borrow later used here
-1161 |             Value::Cons(cell) => {
-1162 |                 let (car, cdr) = cell.borrow().clone();
-     |                           --- binding `cdr` declared here
-...
-1169 |                 current = cdr.as_ref();
-     |                           ^^^ borrowed value does not live long enough
-1170 |             }
-     |             - `cdr` dropped here while still borrowed
-
-error[E0597]: `rest` does not live long enough
-    --> src/lib.rs:1196:19
-     |
-1195 |         let (_, rest) = cell.borrow().clone();
-     |                 ---- binding `rest` declared here
-1196 |         current = rest.as_ref();
-     |                   ^^^^ borrowed value does not live long enough
-1197 |     }
-     |     - `rest` dropped here while still borrowed
-...
-1200 |         match current {
-     |               ------- borrow later used here
-
-error[E0597]: `cdr` does not live long enough
-    --> src/lib.rs:1212:27
-     |
-1200 |         match current {
-     |               ------- borrow later used here
-1201 |             Value::Cons(cell) => {
-1202 |                 let (car, cdr) = cell.borrow().clone();
-     |                           --- binding `cdr` declared here
-...
-1212 |                 current = cdr.as_ref();
-     |                           ^^^ borrowed value does not live long enough
-1213 |             }
-     |             - `cdr` dropped here while still borrowed
-
-error[E0597]: `item_rest` does not live long enough
-    --> src/lib.rs:1370:40
-     |
-1366 |                     match list_cur {
-     |                           -------- borrow later used here
-1367 |                         Value::Cons(item_cell) => {
-1368 |                             let (item, item_rest) = item_cell.borrow().clone();
-     |                                        --------- binding `item_rest` declared here
-1369 |                             result = ValRef::cons(item, result);
-1370 |                             list_cur = item_rest.as_ref();
-     |                                        ^^^^^^^^^ borrowed value does not live long enough
-1371 |                         }
-     |                         - `item_rest` dropped here while still borrowed
-
-error[E0597]: `rest` does not live long enough
-    --> src/lib.rs:1376:27
-     |
-1361 |         match current {
-     |               ------- borrow later used here
-1362 |             Value::Cons(cell) => {
-1363 |                 let (list, rest) = cell.borrow().clone();
-     |                            ---- binding `rest` declared here
-...
-1376 |                 current = rest.as_ref();
-     |                           ^^^^ borrowed value does not live long enough
-1377 |             }
-     |             - `rest` dropped here while still borrowed
-
-error[E0597]: `rest` does not live long enough
-    --> src/lib.rs:1421:27
-     |
-1417 |         match current {
-     |               ------- borrow later used here
-1418 |             Value::Cons(cell) => {
-1419 |                 let (expr, rest) = cell.borrow().clone();
-     |                            ---- binding `rest` declared here
-1420 |                 last_result = eval(expr, env)?;
-1421 |                 current = rest.as_ref();
-     |                           ^^^^ borrowed value does not live long enough
-1422 |             }
-     |             - `rest` dropped here while still borrowed
-
-For more information about this error, try `rustc --explain E0597`.
-warning: `ruthe` (lib) generated 1 warning
-error: could not compile `ruthe` (lib) due to 19 previous errors; 1 warning emitted
+Some errors have detailed explanations: E0499, E0502.
+For more information about an error, try `rustc --explain E0499`.
+warning: `ruthe` (lib) generated 3 warnings
+error: could not compile `ruthe` (lib) due to 6 previous errors; 3 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+warning: `ruthe` (lib test) generated 3 warnings (3 duplicates)
+error: could not compile `ruthe` (lib test) due to 6 previous errors; 3 warnings emitted

@@ -1,607 +1,794 @@
 #![no_std]
 
-extern crate alloc;
-use alloc::rc::Rc;
-use core::cell::RefCell;
-use core::ops::Deref;
+use core::cell::Cell;
 
 // ============================================================================
-// Optimized Value Type - Everything is cons cells!
+// Arena Allocator with Reference Counting
 // ============================================================================
 
-pub type BuiltinFn = fn(&ValRef) -> Result<ValRef, ValRef>;
+const ARENA_SIZE: usize = 2048;
 
-#[derive(Clone)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ArenaRef(u16);
+
+impl ArenaRef {
+    const NULL: ArenaRef = ArenaRef(u16::MAX);
+
+    fn is_null(self) -> bool {
+        self.0 == u16::MAX
+    }
+}
+
+#[derive(Clone, Copy)]
 pub enum Value {
     Number(i64),
-    Symbol(ValRef), // String as cons list of chars
     Bool(bool),
     Char(char),
-    Cons(Rc<RefCell<(ValRef, ValRef)>>), // Unified cons cell - always mutable
-    Builtin(BuiltinFn),
-    Lambda {
-        params: ValRef,
-        body: ValRef,
-        env: ValRef, // Environment is just a ValRef (cons list)
-    },
+    Cons(ArenaRef, ArenaRef),
+    Symbol(ArenaRef),                     // Points to char list
+    Lambda(ArenaRef, ArenaRef, ArenaRef), // params, body, env
+    Builtin(u8),                          // Index into builtin table
     Nil,
+    Free, // Marks freed slot
 }
 
-// Manual Debug implementation
-impl core::fmt::Debug for Value {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Value::Number(n) => write!(f, "Number({})", n),
-            Value::Symbol(_) => write!(f, "Symbol(...)"),
-            Value::Bool(b) => write!(f, "Bool({:?})", b),
-            Value::Char(c) => write!(f, "Char({:?})", c),
-            Value::Cons(_) => write!(f, "Cons(...)"),
-            Value::Builtin(_) => write!(f, "Builtin(<fn>)"),
-            Value::Lambda { .. } => write!(f, "Lambda(<fn>)"),
-            Value::Nil => write!(f, "Nil"),
+pub struct Arena {
+    // Separate arrays for better initialization
+    values: [Value; ARENA_SIZE],
+    refcounts: [Cell<u16>; ARENA_SIZE],
+    next_free: Cell<usize>,
+}
+
+impl Arena {
+    pub fn new() -> Self {
+        Arena {
+            values: [Value::Free; ARENA_SIZE],
+            refcounts: [const { Cell::new(0) }; ARENA_SIZE],
+            next_free: Cell::new(0),
         }
     }
-}
 
-// ============================================================================
-// Trampoline System for Proper TCO
-// ============================================================================
+    pub fn alloc(&mut self, value: Value) -> ArenaRef {
+        let start = self.next_free.get();
 
-pub enum EvalResult {
-    Done(ValRef),
-    TailCall(ValRef, ValRef), // expr, env (both ValRef)
-}
+        // Search for free slot starting from next_free
+        for i in 0..ARENA_SIZE {
+            let idx = (start + i) % ARENA_SIZE;
+            if matches!(self.values[idx], Value::Free) {
+                self.values[idx] = value;
+                self.refcounts[idx].set(1);
+                self.next_free.set((idx + 1) % ARENA_SIZE);
+                return ArenaRef(idx as u16);
+            }
+        }
 
-// ============================================================================
-// ValRef - Newtype wrapper around Rc<Value>
-// ============================================================================
-
-#[derive(Clone, Debug)]
-pub struct ValRef(pub Rc<Value>);
-
-impl ValRef {
-    pub fn new(value: Value) -> Self {
-        ValRef(Rc::new(value))
+        ArenaRef::NULL
     }
 
-    pub fn to_display_str<'a>(&self, buf: &'a mut [u8]) -> Result<&'a str, ()> {
-        self.as_ref().to_display_str(buf)
+    pub fn get(&self, r: ArenaRef) -> Option<&Value> {
+        if r.is_null() {
+            return None;
+        }
+        let value = &self.values[r.0 as usize];
+        if matches!(value, Value::Free) {
+            None
+        } else {
+            Some(value)
+        }
     }
 
-    pub fn number(n: i64) -> Self {
-        Self::new(Value::Number(n))
+    pub fn incref(&self, r: ArenaRef) {
+        if r.is_null() {
+            return;
+        }
+        let idx = r.0 as usize;
+        if !matches!(self.values[idx], Value::Free) {
+            let rc = self.refcounts[idx].get();
+            if rc < u16::MAX {
+                self.refcounts[idx].set(rc + 1);
+            }
+        }
     }
 
-    pub fn new_str(s: &str) -> Self {
-        let mut result = ValRef::nil();
+    pub fn decref(&mut self, r: ArenaRef) {
+        if r.is_null() {
+            return;
+        }
+
+        let idx = r.0 as usize;
+        if matches!(self.values[idx], Value::Free) {
+            return;
+        }
+
+        let rc = self.refcounts[idx].get();
+        if rc > 1 {
+            self.refcounts[idx].set(rc - 1);
+        } else if rc == 1 {
+            // Free this node
+            let value = self.values[idx];
+            self.values[idx] = Value::Free;
+            self.refcounts[idx].set(0);
+
+            // Recursively decref children
+            match value {
+                Value::Cons(car, cdr) => {
+                    self.decref(car);
+                    self.decref(cdr);
+                }
+                Value::Symbol(s) => self.decref(s),
+                Value::Lambda(params, body, env) => {
+                    self.decref(params);
+                    self.decref(body);
+                    self.decref(env);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Constructors
+    pub fn nil(&mut self) -> ArenaRef {
+        self.alloc(Value::Nil)
+    }
+
+    pub fn number(&mut self, n: i64) -> ArenaRef {
+        self.alloc(Value::Number(n))
+    }
+
+    pub fn bool_val(&mut self, b: bool) -> ArenaRef {
+        self.alloc(Value::Bool(b))
+    }
+
+    pub fn char_val(&mut self, c: char) -> ArenaRef {
+        self.alloc(Value::Char(c))
+    }
+
+    pub fn cons(&mut self, car: ArenaRef, cdr: ArenaRef) -> ArenaRef {
+        self.incref(car);
+        self.incref(cdr);
+        self.alloc(Value::Cons(car, cdr))
+    }
+
+    pub fn symbol(&mut self, s: ArenaRef) -> ArenaRef {
+        self.incref(s);
+        self.alloc(Value::Symbol(s))
+    }
+
+    pub fn lambda(&mut self, params: ArenaRef, body: ArenaRef, env: ArenaRef) -> ArenaRef {
+        self.incref(params);
+        self.incref(body);
+        self.incref(env);
+        self.alloc(Value::Lambda(params, body, env))
+    }
+
+    pub fn builtin(&mut self, idx: u8) -> ArenaRef {
+        self.alloc(Value::Builtin(idx))
+    }
+
+    // String helpers
+    pub fn str_to_list(&mut self, s: &str) -> ArenaRef {
+        let mut result = self.nil();
         for ch in s.chars().rev() {
-            result = ValRef::cons(ValRef::char_val(ch), result);
+            let char_ref = self.char_val(ch);
+            let new_cons = self.cons(char_ref, result);
+            self.decref(char_ref);
+            self.decref(result);
+            result = new_cons;
         }
         result
     }
 
-    pub fn symbol(s: ValRef) -> Self {
-        Self::new(Value::Symbol(s))
-    }
-
-    pub fn bool_val(b: bool) -> Self {
-        Self::new(Value::Bool(b))
-    }
-
-    pub fn char_val(c: char) -> Self {
-        Self::new(Value::Char(c))
-    }
-
-    pub fn cons(car: ValRef, cdr: ValRef) -> Self {
-        Self::new(Value::Cons(Rc::new(RefCell::new((car, cdr)))))
-    }
-
-    pub fn builtin(f: BuiltinFn) -> Self {
-        Self::new(Value::Builtin(f))
-    }
-
-    pub fn lambda(params: ValRef, body: ValRef, env: ValRef) -> Self {
-        Self::new(Value::Lambda { params, body, env })
-    }
-
-    pub fn nil() -> Self {
-        Self::new(Value::Nil)
-    }
-
-    pub fn to_str_buf<'a>(&self, buf: &'a mut [u8]) -> Result<&'a str, ()> {
+    pub fn list_to_str<'a>(&self, list: ArenaRef, buf: &'a mut [u8]) -> Option<&'a str> {
         let mut idx = 0;
-        let mut current = self.clone();
+        let mut current = list;
 
         loop {
-            match current.as_ref() {
+            match self.get(current)? {
                 Value::Char(ch) => {
-                    let mut char_buf = [0u8; 4];
-                    let char_str = ch.encode_utf8(&mut char_buf);
-                    let char_bytes = char_str.as_bytes();
-
-                    if idx + char_bytes.len() > buf.len() {
-                        return Err(());
-                    }
-
-                    for &byte in char_bytes {
-                        buf[idx] = byte;
+                    let mut temp = [0u8; 4];
+                    let s = ch.encode_utf8(&mut temp);
+                    for &b in s.as_bytes() {
+                        if idx >= buf.len() {
+                            return None;
+                        }
+                        buf[idx] = b;
                         idx += 1;
                     }
                     break;
                 }
-                Value::Cons(cell) => {
-                    let (car, cdr) = cell.borrow().clone();
-                    if let Value::Char(ch) = car.as_ref() {
-                        let mut char_buf = [0u8; 4];
-                        let char_str = ch.encode_utf8(&mut char_buf);
-                        let char_bytes = char_str.as_bytes();
-
-                        if idx + char_bytes.len() > buf.len() {
-                            return Err(());
-                        }
-
-                        for &byte in char_bytes {
-                            buf[idx] = byte;
+                Value::Cons(car, cdr) => {
+                    if let Value::Char(ch) = self.get(*car)? {
+                        let mut temp = [0u8; 4];
+                        let s = ch.encode_utf8(&mut temp);
+                        for &b in s.as_bytes() {
+                            if idx >= buf.len() {
+                                return None;
+                            }
+                            buf[idx] = b;
                             idx += 1;
                         }
-                        current = cdr;
+                        current = *cdr;
                     } else {
-                        return Err(());
+                        return None;
                     }
                 }
                 Value::Nil => break,
-                _ => return Err(()),
+                _ => return None,
             }
         }
 
-        core::str::from_utf8(&buf[..idx]).map_err(|_| ())
+        core::str::from_utf8(&buf[..idx]).ok()
     }
 
-    pub fn str_eq(&self, other: &ValRef) -> bool {
-        let mut cur1 = self.clone();
-        let mut cur2 = other.clone();
-
-        loop {
-            match (cur1.as_ref(), cur2.as_ref()) {
-                (Value::Cons(cell1), Value::Cons(cell2)) => {
-                    let (c1, r1) = cell1.borrow().clone();
-                    let (c2, r2) = cell2.borrow().clone();
-                    if let (Value::Char(ch1), Value::Char(ch2)) = (c1.as_ref(), c2.as_ref()) {
-                        if ch1 != ch2 {
-                            return false;
-                        }
-                        cur1 = r1;
-                        cur2 = r2;
-                    } else {
-                        return false;
-                    }
-                }
-                (Value::Nil, Value::Nil) => return true,
-                (Value::Char(c1), Value::Char(c2)) => return c1 == c2,
-                _ => return false,
-            }
-        }
-    }
-}
-
-impl Deref for ValRef {
-    type Target = Value;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl AsRef<Value> for ValRef {
-    fn as_ref(&self) -> &Value {
-        &self.0
-    }
-}
-
-impl From<Value> for ValRef {
-    fn from(value: Value) -> Self {
-        ValRef::new(value)
-    }
-}
-
-impl From<Rc<Value>> for ValRef {
-    fn from(rc: Rc<Value>) -> Self {
-        ValRef(rc)
-    }
-}
-
-impl Value {
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            Value::Number(_) => "number",
-            Value::Symbol(_) => "symbol",
-            Value::Bool(_) => "bool",
-            Value::Char(_) => "char",
-            Value::Cons(_) => "cons",
-            Value::Builtin(_) => "builtin",
-            Value::Lambda { .. } => "lambda",
-            Value::Nil => "nil",
-        }
-    }
-
-    pub fn as_bool(&self) -> Option<bool> {
-        match self {
-            Value::Bool(b) => Some(*b),
-            _ => None,
-        }
-    }
-
-    pub fn as_number(&self) -> Option<i64> {
-        match self {
-            Value::Number(n) => Some(*n),
-            _ => None,
-        }
-    }
-
-    pub fn as_char(&self) -> Option<char> {
-        match self {
-            Value::Char(c) => Some(*c),
-            _ => None,
-        }
-    }
-
-    pub fn as_symbol(&self) -> Option<&ValRef> {
-        match self {
-            Value::Symbol(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    pub fn as_cons(&self) -> Option<&Rc<RefCell<(ValRef, ValRef)>>> {
-        match self {
-            Value::Cons(cell) => Some(cell),
-            _ => None,
-        }
-    }
-
-    pub fn as_builtin(&self) -> Option<BuiltinFn> {
-        match self {
-            Value::Builtin(f) => Some(*f),
-            _ => None,
-        }
-    }
-
-    pub fn as_lambda(&self) -> Option<(&ValRef, &ValRef, &ValRef)> {
-        match self {
-            Value::Lambda { params, body, env } => Some((params, body, env)),
-            _ => None,
-        }
-    }
-
-    pub fn is_callable(&self) -> bool {
-        matches!(self, Value::Builtin(_) | Value::Lambda { .. })
-    }
-
-    pub fn is_nil(&self) -> bool {
-        matches!(self, Value::Nil)
-    }
-
-    pub fn to_display_str<'a>(&self, buf: &'a mut [u8]) -> Result<&'a str, ()> {
-        match self {
-            Value::Number(n) => {
-                let mut temp = [0u8; 32];
-                let mut idx = 0;
-                let mut num = *n;
-                let negative = num < 0;
-
-                if negative {
-                    num = -num;
-                }
-
-                if num == 0 {
-                    temp[idx] = b'0';
-                    idx += 1;
-                } else {
-                    let mut divisor = 1i64;
-                    let mut temp_num = num;
-                    while temp_num >= 10 {
-                        divisor *= 10;
-                        temp_num /= 10;
-                    }
-
-                    while divisor > 0 {
-                        let digit = (num / divisor) as u8;
-                        temp[idx] = b'0' + digit;
-                        idx += 1;
-                        num %= divisor;
-                        divisor /= 10;
-                    }
-                }
-
-                if negative {
-                    if idx + 1 > buf.len() {
-                        return Err(());
-                    }
-                    buf[0] = b'-';
-                    for i in 0..idx {
-                        buf[i + 1] = temp[i];
-                    }
-                    idx += 1;
-                } else {
-                    if idx > buf.len() {
-                        return Err(());
-                    }
-                    for i in 0..idx {
-                        buf[i] = temp[i];
-                    }
-                }
-
-                core::str::from_utf8(&buf[..idx]).map_err(|_| ())
-            }
-            Value::Symbol(s) => s.to_str_buf(buf),
-            Value::Bool(b) => {
-                let s = if *b { "#t" } else { "#f" };
-                let bytes = s.as_bytes();
-                if bytes.len() > buf.len() {
-                    return Err(());
-                }
-                for (i, &b) in bytes.iter().enumerate() {
-                    buf[i] = b;
-                }
-                core::str::from_utf8(&buf[..bytes.len()]).map_err(|_| ())
-            }
-            Value::Char(c) => {
-                let mut char_buf = [0u8; 4];
-                let s = c.encode_utf8(&mut char_buf);
-                let bytes = s.as_bytes();
-                if bytes.len() > buf.len() {
-                    return Err(());
-                }
-                for (i, &b) in bytes.iter().enumerate() {
-                    buf[i] = b;
-                }
-                core::str::from_utf8(&buf[..bytes.len()]).map_err(|_| ())
-            }
-            Value::Cons(_) => self.list_to_display_str(buf),
-            Value::Builtin(_) => {
-                let s = "<builtin>";
-                let bytes = s.as_bytes();
-                if bytes.len() > buf.len() {
-                    return Err(());
-                }
-                for (i, &b) in bytes.iter().enumerate() {
-                    buf[i] = b;
-                }
-                core::str::from_utf8(&buf[..bytes.len()]).map_err(|_| ())
-            }
-            Value::Lambda { .. } => {
-                let s = "<lambda>";
-                let bytes = s.as_bytes();
-                if bytes.len() > buf.len() {
-                    return Err(());
-                }
-                for (i, &b) in bytes.iter().enumerate() {
-                    buf[i] = b;
-                }
-                core::str::from_utf8(&buf[..bytes.len()]).map_err(|_| ())
-            }
-            Value::Nil => {
-                let s = "nil";
-                let bytes = s.as_bytes();
-                if bytes.len() > buf.len() {
-                    return Err(());
-                }
-                for (i, &b) in bytes.iter().enumerate() {
-                    buf[i] = b;
-                }
-                core::str::from_utf8(&buf[..bytes.len()]).map_err(|_| ())
-            }
-        }
-    }
-
-    fn list_to_display_str<'a>(&self, buf: &'a mut [u8]) -> Result<&'a str, ()> {
-        let mut idx = 0;
-        if idx >= buf.len() {
-            return Err(());
-        }
-        buf[idx] = b'(';
-        idx += 1;
-
-        let mut current = ValRef::new(self.clone());
-        let mut first = true;
-
-        loop {
-            match current.as_ref() {
-                Value::Cons(cell) => {
-                    let (car, cdr) = cell.borrow().clone();
-                    if !first {
-                        if idx >= buf.len() {
-                            return Err(());
-                        }
-                        buf[idx] = b' ';
-                        idx += 1;
-                    }
-                    first = false;
-
-                    let item_str = car.as_ref().to_display_str(&mut buf[idx..])?;
-                    let item_len = item_str.len();
-                    idx += item_len;
-
-                    current = cdr;
-                }
-                Value::Nil => break,
-                _ => {
-                    if !first {
-                        if idx + 2 >= buf.len() {
-                            return Err(());
-                        }
-                        buf[idx] = b' ';
-                        idx += 1;
-                        buf[idx] = b'.';
-                        idx += 1;
-                        buf[idx] = b' ';
-                        idx += 1;
-                    }
-
-                    let item_str = current.as_ref().to_display_str(&mut buf[idx..])?;
-                    let item_len = item_str.len();
-                    idx += item_len;
-                    break;
-                }
-            }
-        }
-
-        if idx >= buf.len() {
-            return Err(());
-        }
-        buf[idx] = b')';
-        idx += 1;
-
-        core::str::from_utf8(&buf[..idx]).map_err(|_| ())
-    }
-
-    fn list_len(&self) -> usize {
+    pub fn list_len(&self, mut list: ArenaRef) -> usize {
         let mut count = 0;
-        let mut current = ValRef::new(self.clone());
-
         loop {
-            match current.as_ref() {
-                Value::Cons(cell) => {
+            match self.get(list) {
+                Some(Value::Cons(_, cdr)) => {
                     count += 1;
-                    let (_, cdr) = cell.borrow().clone();
-                    current = cdr;
+                    list = *cdr;
                 }
-                Value::Nil => break,
                 _ => break,
             }
         }
-
         count
     }
 
-    fn list_nth(&self, n: usize) -> Option<ValRef> {
-        let mut current = ValRef::new(self.clone());
+    pub fn list_nth(&self, mut list: ArenaRef, n: usize) -> Option<ArenaRef> {
         let mut idx = 0;
-
         loop {
-            match current.as_ref() {
-                Value::Cons(cell) => {
-                    let (car, cdr) = cell.borrow().clone();
+            match self.get(list) {
+                Some(Value::Cons(car, cdr)) => {
                     if idx == n {
-                        return Some(car);
+                        return Some(*car);
                     }
                     idx += 1;
-                    current = cdr;
+                    list = *cdr;
                 }
                 _ => return None,
             }
         }
     }
+
+    pub fn reverse_list(&mut self, mut list: ArenaRef) -> ArenaRef {
+        let mut result = self.nil();
+        loop {
+            // Extract values first to avoid borrow conflicts
+            let pair = match self.get(list) {
+                Some(Value::Cons(car, cdr)) => Some((*car, *cdr)),
+                _ => None,
+            };
+
+            match pair {
+                Some((car, cdr)) => {
+                    let new_result = self.cons(car, result);
+                    self.decref(result);
+                    result = new_result;
+                    list = cdr;
+                }
+                None => break,
+            }
+        }
+        result
+    }
+
+    pub fn str_eq(&self, mut s1: ArenaRef, mut s2: ArenaRef) -> bool {
+        loop {
+            match (self.get(s1), self.get(s2)) {
+                (Some(Value::Cons(c1, r1)), Some(Value::Cons(c2, r2))) => {
+                    if let (Some(Value::Char(ch1)), Some(Value::Char(ch2))) =
+                        (self.get(*c1), self.get(*c2))
+                    {
+                        if ch1 != ch2 {
+                            return false;
+                        }
+                        s1 = *r1;
+                        s2 = *r2;
+                    } else {
+                        return false;
+                    }
+                }
+                (Some(Value::Nil), Some(Value::Nil)) => return true,
+                _ => return false,
+            }
+        }
+    }
+
+    // Set cons cell in place (for environment mutation)
+    pub fn set_cons(&mut self, cons_ref: ArenaRef, new_car: ArenaRef, new_cdr: ArenaRef) {
+        if let Some(Value::Cons(old_car, old_cdr)) = self.get(cons_ref).copied() {
+            self.incref(new_car);
+            self.incref(new_cdr);
+            self.values[cons_ref.0 as usize] = Value::Cons(new_car, new_cdr);
+            self.decref(old_car);
+            self.decref(old_cdr);
+        }
+    }
 }
 
 // ============================================================================
-// Environment Operations - Mutable cons list manipulation
+// Environment Operations
 // ============================================================================
 
-/// Environment structure:
-/// Cons((bindings . parent_env))
-/// where bindings is a cons list of (symbol . value) pairs
-
-fn env_new() -> ValRef {
-    let env = ValRef::cons(ValRef::nil(), ValRef::nil());
-    register_builtins(&env);
+pub fn env_new(arena: &mut Arena) -> ArenaRef {
+    // Create intermediate values to avoid multiple mutable borrows
+    let nil1 = arena.nil();
+    let nil2 = arena.nil();
+    let env = arena.cons(nil1, nil2);
+    arena.decref(nil1);
+    arena.decref(nil2);
+    register_builtins(arena, env);
     env
 }
 
-fn env_with_parent(parent: ValRef) -> ValRef {
-    ValRef::cons(ValRef::nil(), parent)
+pub fn env_with_parent(arena: &mut Arena, parent: ArenaRef) -> ArenaRef {
+    let nil = arena.nil();
+    let result = arena.cons(nil, parent);
+    arena.decref(nil);
+    result
 }
 
-fn env_set(env: &ValRef, name: ValRef, value: ValRef) {
-    // env is Cons(bindings, parent)
-    if let Some(cell) = env.as_cons() {
-        let (bindings, parent) = cell.borrow().clone();
-        let new_binding = ValRef::cons(ValRef::symbol(name), value);
-        let new_bindings = ValRef::cons(new_binding, bindings);
-        *cell.borrow_mut() = (new_bindings, parent);
+pub fn env_set(arena: &mut Arena, env: ArenaRef, name: ArenaRef, value: ArenaRef) {
+    if let Some(Value::Cons(bindings, parent)) = arena.get(env).copied() {
+        let sym = arena.symbol(name);
+        let new_binding = arena.cons(sym, value);
+        let new_bindings = arena.cons(new_binding, bindings);
+        arena.set_cons(env, new_bindings, parent);
+        arena.decref(sym);
+        arena.decref(new_binding);
+        arena.decref(new_bindings);
     }
 }
 
-fn env_get(env: &ValRef, name: &ValRef) -> Option<ValRef> {
-    match env.as_ref() {
-        Value::Cons(cell) => {
-            let (bindings, parent) = cell.borrow().clone();
-
-            // Search in current bindings
-            let mut current = bindings;
-            loop {
-                match current.as_ref() {
-                    Value::Cons(binding_cell) => {
-                        let (binding, rest) = binding_cell.borrow().clone();
-                        if let Value::Cons(key_value_cell) = binding.as_ref() {
-                            let (key, value) = key_value_cell.borrow().clone();
-                            if let Value::Symbol(s) = key.as_ref() {
-                                if s.str_eq(name) {
-                                    return Some(value);
+pub fn env_get(arena: &Arena, mut env: ArenaRef, name: ArenaRef) -> Option<ArenaRef> {
+    loop {
+        match arena.get(env).copied() {
+            Some(Value::Cons(bindings, parent)) => {
+                let mut bindings_list = bindings;
+                loop {
+                    match arena.get(bindings_list).copied() {
+                        Some(Value::Cons(binding, rest)) => {
+                            if let Some(Value::Cons(key, value)) = arena.get(binding).copied() {
+                                if let Some(Value::Symbol(s)) = arena.get(key).copied() {
+                                    if arena.str_eq(s, name) {
+                                        return Some(value);
+                                    }
                                 }
                             }
+                            bindings_list = rest;
                         }
-                        current = rest;
+                        _ => break,
                     }
-                    Value::Nil => break,
-                    _ => break,
+                }
+
+                match arena.get(parent) {
+                    Some(Value::Nil) => return None,
+                    _ => env = parent,
                 }
             }
-
-            // Search in parent
-            if !parent.is_nil() {
-                env_get(&parent, name)
-            } else {
-                None
-            }
+            _ => return None,
         }
-        _ => None,
     }
 }
 
-fn register_builtins(env: &ValRef) {
-    env_set(env, ValRef::new_str("nil"), ValRef::nil());
-    env_set(env, ValRef::new_str("+"), ValRef::builtin(builtin_add));
-    env_set(env, ValRef::new_str("-"), ValRef::builtin(builtin_sub));
-    env_set(env, ValRef::new_str("*"), ValRef::builtin(builtin_mul));
-    env_set(env, ValRef::new_str("/"), ValRef::builtin(builtin_div));
-    env_set(env, ValRef::new_str("="), ValRef::builtin(builtin_eq));
-    env_set(env, ValRef::new_str("<"), ValRef::builtin(builtin_lt));
-    env_set(env, ValRef::new_str(">"), ValRef::builtin(builtin_gt));
-    env_set(env, ValRef::new_str("list"), ValRef::builtin(builtin_list));
-    env_set(env, ValRef::new_str("car"), ValRef::builtin(builtin_car));
-    env_set(env, ValRef::new_str("cdr"), ValRef::builtin(builtin_cdr));
-    env_set(
-        env,
-        ValRef::new_str("cons"),
-        ValRef::builtin(builtin_cons_fn),
-    );
-    env_set(env, ValRef::new_str("null?"), ValRef::builtin(builtin_null));
-    env_set(
-        env,
-        ValRef::new_str("cons?"),
-        ValRef::builtin(builtin_cons_p),
-    );
-    env_set(
-        env,
-        ValRef::new_str("length"),
-        ValRef::builtin(builtin_length),
-    );
-    env_set(
-        env,
-        ValRef::new_str("append"),
-        ValRef::builtin(builtin_append),
-    );
-    env_set(
-        env,
-        ValRef::new_str("reverse"),
-        ValRef::builtin(builtin_reverse),
-    );
+// ============================================================================
+// Builtin Functions
+// ============================================================================
+
+const BUILTIN_ADD: u8 = 0;
+const BUILTIN_SUB: u8 = 1;
+const BUILTIN_MUL: u8 = 2;
+const BUILTIN_DIV: u8 = 3;
+const BUILTIN_EQ: u8 = 4;
+const BUILTIN_LT: u8 = 5;
+const BUILTIN_GT: u8 = 6;
+const BUILTIN_CAR: u8 = 7;
+const BUILTIN_CDR: u8 = 8;
+const BUILTIN_CONS: u8 = 9;
+const BUILTIN_LIST: u8 = 10;
+const BUILTIN_NULL: u8 = 11;
+
+type BuiltinFn = fn(&mut Arena, ArenaRef) -> Result<ArenaRef, ArenaRef>;
+
+const BUILTINS: [BuiltinFn; 12] = [
+    builtin_add,
+    builtin_sub,
+    builtin_mul,
+    builtin_div,
+    builtin_eq,
+    builtin_lt,
+    builtin_gt,
+    builtin_car,
+    builtin_cdr,
+    builtin_cons_fn,
+    builtin_list,
+    builtin_null,
+];
+
+fn call_builtin(arena: &mut Arena, idx: u8, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    if (idx as usize) < BUILTINS.len() {
+        BUILTINS[idx as usize](arena, args)
+    } else {
+        Err(arena.str_to_list("Unknown builtin"))
+    }
+}
+
+fn builtin_add(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    let mut result = 0i64;
+    let mut current = args;
+
+    loop {
+        match arena.get(current).copied() {
+            Some(Value::Cons(car, cdr)) => {
+                if let Some(Value::Number(n)) = arena.get(car) {
+                    result = result
+                        .checked_add(*n)
+                        .ok_or_else(|| arena.str_to_list("Overflow"))?;
+                    current = cdr;
+                } else {
+                    return Err(arena.str_to_list("+ requires numbers"));
+                }
+            }
+            Some(Value::Nil) => break,
+            _ => return Err(arena.str_to_list("Invalid args")),
+        }
+    }
+
+    Ok(arena.number(result))
+}
+
+fn builtin_sub(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    let len = arena.list_len(args);
+    if len == 0 {
+        return Err(arena.str_to_list("- requires args"));
+    }
+
+    let first = arena.list_nth(args, 0).unwrap();
+    let first_num = if let Some(Value::Number(n)) = arena.get(first) {
+        *n
+    } else {
+        return Err(arena.str_to_list("- requires numbers"));
+    };
+
+    if len == 1 {
+        return Ok(arena.number(-first_num));
+    }
+
+    let mut result = first_num;
+    let mut current = if let Some(Value::Cons(_, cdr)) = arena.get(args).copied() {
+        cdr
+    } else {
+        return Err(arena.str_to_list("Invalid args"));
+    };
+
+    loop {
+        match arena.get(current).copied() {
+            Some(Value::Cons(car, cdr)) => {
+                if let Some(Value::Number(n)) = arena.get(car) {
+                    result = result
+                        .checked_sub(*n)
+                        .ok_or_else(|| arena.str_to_list("Overflow"))?;
+                    current = cdr;
+                } else {
+                    return Err(arena.str_to_list("- requires numbers"));
+                }
+            }
+            Some(Value::Nil) => break,
+            _ => return Err(arena.str_to_list("Invalid args")),
+        }
+    }
+
+    Ok(arena.number(result))
+}
+
+fn builtin_mul(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    let mut result = 1i64;
+    let mut current = args;
+
+    loop {
+        match arena.get(current).copied() {
+            Some(Value::Cons(car, cdr)) => {
+                if let Some(Value::Number(n)) = arena.get(car) {
+                    result = result
+                        .checked_mul(*n)
+                        .ok_or_else(|| arena.str_to_list("Overflow"))?;
+                    current = cdr;
+                } else {
+                    return Err(arena.str_to_list("* requires numbers"));
+                }
+            }
+            Some(Value::Nil) => break,
+            _ => return Err(arena.str_to_list("Invalid args")),
+        }
+    }
+
+    Ok(arena.number(result))
+}
+
+fn builtin_div(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    let len = arena.list_len(args);
+    if len < 2 {
+        return Err(arena.str_to_list("/ requires 2+ args"));
+    }
+
+    let first = arena.list_nth(args, 0).unwrap();
+    let mut result = if let Some(Value::Number(n)) = arena.get(first) {
+        *n
+    } else {
+        return Err(arena.str_to_list("/ requires numbers"));
+    };
+
+    let mut current = if let Some(Value::Cons(_, cdr)) = arena.get(args).copied() {
+        cdr
+    } else {
+        return Err(arena.str_to_list("Invalid args"));
+    };
+
+    loop {
+        match arena.get(current).copied() {
+            Some(Value::Cons(car, cdr)) => {
+                if let Some(Value::Number(n)) = arena.get(car) {
+                    if *n == 0 {
+                        return Err(arena.str_to_list("Division by zero"));
+                    }
+                    result = result
+                        .checked_div(*n)
+                        .ok_or_else(|| arena.str_to_list("Overflow"))?;
+                    current = cdr;
+                } else {
+                    return Err(arena.str_to_list("/ requires numbers"));
+                }
+            }
+            Some(Value::Nil) => break,
+            _ => return Err(arena.str_to_list("Invalid args")),
+        }
+    }
+
+    Ok(arena.number(result))
+}
+
+fn builtin_eq(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    if arena.list_len(args) != 2 {
+        return Err(arena.str_to_list("= requires 2 args"));
+    }
+    let a = arena.list_nth(args, 0).unwrap();
+    let b = arena.list_nth(args, 1).unwrap();
+
+    let eq = match (arena.get(a), arena.get(b)) {
+        (Some(Value::Number(x)), Some(Value::Number(y))) => x == y,
+        _ => return Err(arena.str_to_list("= requires numbers")),
+    };
+
+    Ok(arena.bool_val(eq))
+}
+
+fn builtin_lt(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    if arena.list_len(args) != 2 {
+        return Err(arena.str_to_list("< requires 2 args"));
+    }
+    let a = arena.list_nth(args, 0).unwrap();
+    let b = arena.list_nth(args, 1).unwrap();
+
+    let lt = match (arena.get(a), arena.get(b)) {
+        (Some(Value::Number(x)), Some(Value::Number(y))) => x < y,
+        _ => return Err(arena.str_to_list("< requires numbers")),
+    };
+
+    Ok(arena.bool_val(lt))
+}
+
+fn builtin_gt(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    if arena.list_len(args) != 2 {
+        return Err(arena.str_to_list("> requires 2 args"));
+    }
+    let a = arena.list_nth(args, 0).unwrap();
+    let b = arena.list_nth(args, 1).unwrap();
+
+    let gt = match (arena.get(a), arena.get(b)) {
+        (Some(Value::Number(x)), Some(Value::Number(y))) => x > y,
+        _ => return Err(arena.str_to_list("> requires numbers")),
+    };
+
+    Ok(arena.bool_val(gt))
+}
+
+fn builtin_car(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    if arena.list_len(args) != 1 {
+        return Err(arena.str_to_list("car requires 1 arg"));
+    }
+    let list = arena.list_nth(args, 0).unwrap();
+    if let Some(Value::Cons(car, _)) = arena.get(list) {
+        let result = *car;
+        arena.incref(result);
+        Ok(result)
+    } else {
+        Err(arena.str_to_list("car requires cons"))
+    }
+}
+
+fn builtin_cdr(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    if arena.list_len(args) != 1 {
+        return Err(arena.str_to_list("cdr requires 1 arg"));
+    }
+    let list = arena.list_nth(args, 0).unwrap();
+    if let Some(Value::Cons(_, cdr)) = arena.get(list) {
+        let result = *cdr;
+        arena.incref(result);
+        Ok(result)
+    } else {
+        Err(arena.str_to_list("cdr requires cons"))
+    }
+}
+
+fn builtin_cons_fn(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    if arena.list_len(args) != 2 {
+        return Err(arena.str_to_list("cons requires 2 args"));
+    }
+    let car = arena.list_nth(args, 0).unwrap();
+    let cdr = arena.list_nth(args, 1).unwrap();
+    Ok(arena.cons(car, cdr))
+}
+
+fn builtin_list(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    arena.incref(args);
+    Ok(args)
+}
+
+fn builtin_null(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    if arena.list_len(args) != 1 {
+        return Err(arena.str_to_list("null? requires 1 arg"));
+    }
+    let val = arena.list_nth(args, 0).unwrap();
+    let is_nil = matches!(arena.get(val), Some(Value::Nil));
+    Ok(arena.bool_val(is_nil))
+}
+
+fn register_builtins(arena: &mut Arena, env: ArenaRef) {
+    let builtins = [
+        ("+", BUILTIN_ADD),
+        ("-", BUILTIN_SUB),
+        ("*", BUILTIN_MUL),
+        ("/", BUILTIN_DIV),
+        ("=", BUILTIN_EQ),
+        ("<", BUILTIN_LT),
+        (">", BUILTIN_GT),
+        ("car", BUILTIN_CAR),
+        ("cdr", BUILTIN_CDR),
+        ("cons", BUILTIN_CONS),
+        ("list", BUILTIN_LIST),
+        ("null?", BUILTIN_NULL),
+    ];
+
+    for (name, idx) in builtins {
+        let name_ref = arena.str_to_list(name);
+        let builtin_ref = arena.builtin(idx);
+        env_set(arena, env, name_ref, builtin_ref);
+        arena.decref(name_ref);
+        arena.decref(builtin_ref);
+    }
 }
 
 // ============================================================================
 // Tokenizer
 // ============================================================================
+
+fn is_delimiter(ch: char) -> bool {
+    ch.is_whitespace() || ch == '(' || ch == ')' || ch == '\'' || ch == ';'
+}
+
+pub fn tokenize(arena: &mut Arena, input: &str) -> Result<ArenaRef, ArenaRef> {
+    let mut result = arena.nil();
+    let mut chars = input.chars().peekable();
+
+    while let Some(&ch) = chars.peek() {
+        match ch {
+            ' ' | '\t' | '\n' | '\r' => {
+                chars.next();
+            }
+            '(' => {
+                let tok = arena.str_to_list("(");
+                let sym = arena.symbol(tok);
+                let new_result = arena.cons(sym, result);
+                arena.decref(tok);
+                arena.decref(sym);
+                arena.decref(result);
+                result = new_result;
+                chars.next();
+            }
+            ')' => {
+                let tok = arena.str_to_list(")");
+                let sym = arena.symbol(tok);
+                let new_result = arena.cons(sym, result);
+                arena.decref(tok);
+                arena.decref(sym);
+                arena.decref(result);
+                result = new_result;
+                chars.next();
+            }
+            '\'' => {
+                let tok = arena.str_to_list("'");
+                let sym = arena.symbol(tok);
+                let new_result = arena.cons(sym, result);
+                arena.decref(tok);
+                arena.decref(sym);
+                arena.decref(result);
+                result = new_result;
+                chars.next();
+            }
+            ';' => {
+                while let Some(&c) = chars.peek() {
+                    chars.next();
+                    if c == '\n' {
+                        break;
+                    }
+                }
+            }
+            '#' => {
+                chars.next();
+                match chars.peek() {
+                    Some(&'t') => {
+                        let val = arena.bool_val(true);
+                        let new_result = arena.cons(val, result);
+                        arena.decref(val);
+                        arena.decref(result);
+                        result = new_result;
+                        chars.next();
+                    }
+                    Some(&'f') => {
+                        let val = arena.bool_val(false);
+                        let new_result = arena.cons(val, result);
+                        arena.decref(val);
+                        arena.decref(result);
+                        result = new_result;
+                        chars.next();
+                    }
+                    _ => return Err(arena.str_to_list("Invalid boolean")),
+                }
+            }
+            _ => {
+                let mut atom = arena.nil();
+                while let Some(&c) = chars.peek() {
+                    if is_delimiter(c) {
+                        break;
+                    }
+                    let ch_val = arena.char_val(c);
+                    let new_atom = arena.cons(ch_val, atom);
+                    arena.decref(ch_val);
+                    arena.decref(atom);
+                    atom = new_atom;
+                    chars.next();
+                }
+
+                atom = arena.reverse_list(atom);
+
+                // Try to parse as number
+                let mut buf = [0u8; 64];
+                if let Some(s) = arena.list_to_str(atom, &mut buf) {
+                    if let Ok(num) = parse_i64(s) {
+                        let num_val = arena.number(num);
+                        let new_result = arena.cons(num_val, result);
+                        arena.decref(num_val);
+                        arena.decref(atom);
+                        arena.decref(result);
+                        result = new_result;
+                    } else {
+                        let sym = arena.symbol(atom);
+                        let new_result = arena.cons(sym, result);
+                        arena.decref(sym);
+                        arena.decref(atom);
+                        arena.decref(result);
+                        result = new_result;
+                    }
+                } else {
+                    arena.decref(atom);
+                    return Err(arena.str_to_list("Atom too long"));
+                }
+            }
+        }
+    }
+
+    Ok(arena.reverse_list(result))
+}
 
 fn parse_i64(s: &str) -> Result<i64, ()> {
     let bytes = s.as_bytes();
@@ -610,24 +797,16 @@ fn parse_i64(s: &str) -> Result<i64, ()> {
     }
 
     let (negative, start) = if bytes[0] == b'-' {
-        if bytes.len() == 1 {
-            return Err(());
-        }
         (true, 1)
-    } else if bytes[0] == b'+' {
-        if bytes.len() == 1 {
-            return Err(());
-        }
-        (false, 1)
     } else {
         (false, 0)
     };
 
-    if bytes[start..].is_empty() {
+    if start >= bytes.len() {
         return Err(());
     }
 
-    let mut result: i64 = 0;
+    let mut result = 0i64;
     for &b in &bytes[start..] {
         if !(b'0'..=b'9').contains(&b) {
             return Err(());
@@ -646,819 +825,331 @@ fn parse_i64(s: &str) -> Result<i64, ()> {
     }
 }
 
-fn tokenize(input: &str) -> Result<ValRef, ValRef> {
-    let mut result = ValRef::nil();
-    let mut chars = input.chars().peekable();
-
-    while let Some(&ch) = chars.peek() {
-        match ch {
-            ' ' | '\t' | '\n' | '\r' => {
-                chars.next();
-            }
-            '(' => {
-                result = ValRef::cons(ValRef::symbol(ValRef::new_str("(")), result);
-                chars.next();
-            }
-            ')' => {
-                result = ValRef::cons(ValRef::symbol(ValRef::new_str(")")), result);
-                chars.next();
-            }
-            '\'' => {
-                result = ValRef::cons(ValRef::symbol(ValRef::new_str("'")), result);
-                chars.next();
-            }
-            ';' => {
-                while let Some(&c) = chars.peek() {
-                    chars.next();
-                    if c == '\n' {
-                        break;
-                    }
-                }
-            }
-            '#' => {
-                chars.next();
-                match chars.peek() {
-                    Some(&'t') => {
-                        result = ValRef::cons(ValRef::bool_val(true), result);
-                        chars.next();
-                    }
-                    Some(&'f') => {
-                        result = ValRef::cons(ValRef::bool_val(false), result);
-                        chars.next();
-                    }
-                    _ => return Err(ValRef::new_str("Invalid boolean literal")),
-                }
-            }
-            _ => {
-                let mut atom_chars = ValRef::nil();
-                while let Some(&c) = chars.peek() {
-                    if c.is_whitespace() || c == '(' || c == ')' || c == '\'' {
-                        break;
-                    }
-                    atom_chars = ValRef::cons(ValRef::char_val(c), atom_chars);
-                    chars.next();
-                }
-
-                if atom_chars.is_nil() {
-                    continue;
-                }
-
-                atom_chars = reverse_list(atom_chars);
-
-                let mut buf = [0u8; 128];
-                let mut idx = 0;
-                let mut cur = atom_chars;
-                loop {
-                    match cur.as_ref() {
-                        Value::Cons(cell) => {
-                            let (car, cdr) = cell.borrow().clone();
-                            if let Value::Char(ch) = car.as_ref() {
-                                let mut char_buf = [0u8; 4];
-                                let s = ch.encode_utf8(&mut char_buf);
-                                for &b in s.as_bytes() {
-                                    if idx >= buf.len() {
-                                        return Err(ValRef::new_str("Atom too long"));
-                                    }
-                                    buf[idx] = b;
-                                    idx += 1;
-                                }
-                            }
-                            cur = cdr;
-                        }
-                        Value::Nil => break,
-                        _ => break,
-                    }
-                }
-
-                let atom_str = core::str::from_utf8(&buf[..idx])
-                    .map_err(|_| ValRef::new_str("Invalid UTF-8"))?;
-
-                if let Ok(num) = parse_i64(atom_str) {
-                    result = ValRef::cons(ValRef::number(num), result);
-                } else {
-                    result = ValRef::cons(ValRef::symbol(ValRef::new_str(atom_str)), result);
-                }
-            }
-        }
-    }
-
-    Ok(reverse_list(result))
-}
-
-fn reverse_list(list: ValRef) -> ValRef {
-    let mut result = ValRef::nil();
-    let mut current = list;
-
-    loop {
-        match current.as_ref() {
-            Value::Cons(cell) => {
-                let (car, cdr) = cell.borrow().clone();
-                result = ValRef::cons(car, result);
-                current = cdr;
-            }
-            Value::Nil => break,
-            _ => break,
-        }
-    }
-
-    result
-}
-
 // ============================================================================
 // Parser
 // ============================================================================
 
-fn parse_tokens(tokens: ValRef) -> Result<(ValRef, ValRef), ValRef> {
-    match tokens.as_ref() {
-        Value::Nil => Err(ValRef::new_str("Unexpected end of input")),
-        Value::Cons(cell) => {
-            let (first, rest) = cell.borrow().clone();
-            match first.as_ref() {
-                Value::Number(_) | Value::Bool(_) => Ok((first, rest)),
-                Value::Symbol(s) => {
-                    let mut buf = [0u8; 32];
-                    let s_str = s
-                        .to_str_buf(&mut buf)
-                        .map_err(|_| ValRef::new_str("Symbol too long"))?;
+pub fn parse(arena: &mut Arena, tokens: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    let (expr, remaining) = parse_one(arena, tokens)?;
+    if !matches!(arena.get(remaining), Some(Value::Nil)) {
+        return Err(arena.str_to_list("Extra tokens"));
+    }
+    Ok(expr)
+}
 
+fn parse_one(arena: &mut Arena, tokens: ArenaRef) -> Result<(ArenaRef, ArenaRef), ArenaRef> {
+    match arena.get(tokens).copied() {
+        Some(Value::Nil) => Err(arena.str_to_list("Unexpected EOF")),
+        Some(Value::Cons(first, rest)) => match arena.get(first) {
+            Some(Value::Number(_)) | Some(Value::Bool(_)) => {
+                arena.incref(first);
+                arena.incref(rest);
+                Ok((first, rest))
+            }
+            Some(Value::Symbol(s)) => {
+                let mut buf = [0u8; 32];
+                if let Some(s_str) = arena.list_to_str(*s, &mut buf) {
                     if s_str == "'" {
-                        if let Value::Cons(next_cell) = rest.as_ref() {
-                            let (next_expr, remaining) = next_cell.borrow().clone();
-                            let (val, consumed) = parse_tokens(ValRef::cons(next_expr, remaining))?;
-                            let quoted = ValRef::cons(
-                                ValRef::symbol(ValRef::new_str("quote")),
-                                ValRef::cons(val, ValRef::nil()),
-                            );
-                            Ok((quoted, consumed))
-                        } else {
-                            Err(ValRef::new_str("Quote requires an expression"))
-                        }
+                        let (expr, consumed) = parse_one(arena, rest)?;
+                        let quote_sym = arena.str_to_list("quote");
+                        let quoted_sym = arena.symbol(quote_sym);
+                        let nil = arena.nil();
+                        let list = arena.cons(expr, nil);
+                        let quoted = arena.cons(quoted_sym, list);
+                        arena.decref(quote_sym);
+                        arena.decref(quoted_sym);
+                        arena.decref(expr);
+                        arena.decref(nil);
+                        arena.decref(list);
+                        Ok((quoted, consumed))
                     } else if s_str == "(" {
-                        let mut items = ValRef::nil();
-                        let mut pos = rest;
-
-                        loop {
-                            match pos.as_ref() {
-                                Value::Nil => return Err(ValRef::new_str("Unmatched '('")),
-                                Value::Cons(token_cell) => {
-                                    let (token, rest_tokens) = token_cell.borrow().clone();
-                                    if let Value::Symbol(tok_s) = token.as_ref() {
-                                        let mut tok_buf = [0u8; 32];
-                                        let tok_str = tok_s
-                                            .to_str_buf(&mut tok_buf)
-                                            .map_err(|_| ValRef::new_str("Symbol too long"))?;
-                                        if tok_str == ")" {
-                                            return Ok((reverse_list(items), rest_tokens));
-                                        }
-                                    }
-                                    let (val, consumed) = parse_tokens(pos)?;
-                                    items = ValRef::cons(val, items);
-                                    pos = consumed;
-                                }
-                                _ => return Err(ValRef::new_str("Invalid token stream")),
-                            }
-                        }
+                        parse_list(arena, rest)
                     } else if s_str == ")" {
-                        Err(ValRef::new_str("Unexpected ')'"))
+                        Err(arena.str_to_list("Unexpected )"))
                     } else {
+                        arena.incref(first);
+                        arena.incref(rest);
                         Ok((first, rest))
                     }
+                } else {
+                    Err(arena.str_to_list("Symbol too long"))
                 }
-                _ => Err(ValRef::new_str("Unexpected token type")),
             }
-        }
-        _ => Err(ValRef::new_str("Invalid token stream")),
+            _ => Err(arena.str_to_list("Invalid token")),
+        },
+        _ => Err(arena.str_to_list("Invalid tokens")),
     }
 }
 
-pub fn parse(input: &str) -> Result<ValRef, ValRef> {
-    let tokens = tokenize(input)?;
-    if tokens.is_nil() {
-        return Err(ValRef::new_str("Empty input"));
-    }
-    let (val, remaining) = parse_tokens(tokens)?;
-    if !remaining.is_nil() {
-        return Err(ValRef::new_str("Unexpected tokens after expression"));
-    }
-    Ok(val)
-}
-
-pub fn parse_multiple(input: &str) -> Result<ValRef, ValRef> {
-    let tokens = tokenize(input)?;
-    if tokens.is_nil() {
-        return Err(ValRef::new_str("Empty input"));
-    }
-
-    let mut expressions = ValRef::nil();
-    let mut pos = tokens;
+fn parse_list(arena: &mut Arena, mut tokens: ArenaRef) -> Result<(ArenaRef, ArenaRef), ArenaRef> {
+    let mut items = arena.nil();
 
     loop {
-        if pos.is_nil() {
-            break;
-        }
-        let (val, consumed) = parse_tokens(pos)?;
-        expressions = ValRef::cons(val, expressions);
-        pos = consumed;
-    }
+        match arena.get(tokens).copied() {
+            Some(Value::Nil) => return Err(arena.str_to_list("Unmatched (")),
+            Some(Value::Cons(tok, rest)) => {
+                if let Some(Value::Symbol(s)) = arena.get(tok) {
+                    let mut buf = [0u8; 32];
+                    if let Some(s_str) = arena.list_to_str(*s, &mut buf) {
+                        if s_str == ")" {
+                            let result = arena.reverse_list(items);
+                            arena.decref(items);
+                            arena.incref(rest);
+                            return Ok((result, rest));
+                        }
+                    }
+                }
 
-    Ok(reverse_list(expressions))
+                let (expr, consumed) = parse_one(arena, tokens)?;
+                let new_items = arena.cons(expr, items);
+                arena.decref(expr);
+                arena.decref(items);
+                items = new_items;
+                tokens = consumed;
+            }
+            _ => return Err(arena.str_to_list("Invalid tokens")),
+        }
+    }
 }
 
 // ============================================================================
-// Evaluator - With Proper Tail Call Optimization via Trampoline
+// Evaluator
 // ============================================================================
 
-fn eval_step(expr: ValRef, env: &ValRef) -> Result<EvalResult, ValRef> {
-    match expr.as_ref() {
-        Value::Number(_)
-        | Value::Bool(_)
-        | Value::Char(_)
-        | Value::Builtin(_)
-        | Value::Lambda { .. } => Ok(EvalResult::Done(expr.clone())),
-        Value::Symbol(s) => {
-            let mut buf = [0u8; 32];
-            let s_str = s
-                .to_str_buf(&mut buf)
-                .map_err(|_| ValRef::new_str("Symbol too long"))?;
-
-            if s_str == "nil" {
-                return Ok(EvalResult::Done(ValRef::nil()));
-            }
-            env_get(env, s)
-                .map(EvalResult::Done)
-                .ok_or_else(|| ValRef::new_str("Unbound symbol"))
+pub fn eval(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    match arena.get(expr) {
+        Some(Value::Number(_))
+        | Some(Value::Bool(_))
+        | Some(Value::Builtin(_))
+        | Some(Value::Lambda(..)) => {
+            arena.incref(expr);
+            Ok(expr)
         }
-        Value::Cons(cell) => {
-            let (car, cdr) = cell.borrow().clone();
-            if let Value::Symbol(sym) = car.as_ref() {
+        Some(Value::Symbol(s)) => {
+            let s = *s;
+            let nil_str = arena.str_to_list("nil");
+            let is_nil = arena.str_eq(s, nil_str);
+            arena.decref(nil_str);
+
+            if is_nil {
+                return Ok(arena.nil());
+            }
+
+            if let Some(val) = env_get(arena, env, s) {
+                arena.incref(val);
+                Ok(val)
+            } else {
+                Err(arena.str_to_list("Unbound symbol"))
+            }
+        }
+        Some(Value::Cons(car, _)) => {
+            let car = *car;
+
+            // Check for special forms
+            if let Some(Value::Symbol(sym)) = arena.get(car) {
+                let sym = *sym;
                 let mut buf = [0u8; 32];
-                let sym_str = sym
-                    .to_str_buf(&mut buf)
-                    .map_err(|_| ValRef::new_str("Symbol too long"))?;
-
-                match sym_str {
-                    "define" => {
-                        let len = expr.as_ref().list_len();
-                        if len != 3 {
-                            return Err(ValRef::new_str("define requires 2 arguments"));
-                        }
-                        let name_val = expr
-                            .as_ref()
-                            .list_nth(1)
-                            .ok_or(ValRef::new_str("define missing name"))?;
-                        let name = name_val
-                            .as_symbol()
-                            .ok_or(ValRef::new_str("define requires symbol as first arg"))?
-                            .clone();
-                        let body_val = expr
-                            .as_ref()
-                            .list_nth(2)
-                            .ok_or(ValRef::new_str("define missing body"))?;
-                        let val = eval(body_val, env)?;
-                        env_set(env, name, val.clone());
-                        return Ok(EvalResult::Done(val));
-                    }
-                    "lambda" => {
-                        let len = expr.as_ref().list_len();
-                        if len != 3 {
-                            return Err(ValRef::new_str(
-                                "lambda requires 2 arguments (params body)",
-                            ));
-                        }
-
-                        let params_list = expr
-                            .as_ref()
-                            .list_nth(1)
-                            .ok_or(ValRef::new_str("lambda missing params"))?;
-
-                        let mut current = params_list.clone();
-                        loop {
-                            match current.as_ref() {
-                                Value::Cons(param_cell) => {
-                                    let (param, rest) = param_cell.borrow().clone();
-                                    if param.as_symbol().is_none() {
-                                        return Err(ValRef::new_str(
-                                            "lambda params must be symbols",
-                                        ));
-                                    }
-                                    current = rest;
-                                }
-                                Value::Nil => break,
-                                _ => return Err(ValRef::new_str("lambda params must be a list")),
+                if let Some(sym_str) = arena.list_to_str(sym, &mut buf) {
+                    match sym_str {
+                        "quote" => {
+                            if let Some(quoted) = arena.list_nth(expr, 1) {
+                                arena.incref(quoted);
+                                return Ok(quoted);
                             }
                         }
-
-                        let body = expr
-                            .as_ref()
-                            .list_nth(2)
-                            .ok_or(ValRef::new_str("lambda missing body"))?;
-
-                        return Ok(EvalResult::Done(ValRef::lambda(
-                            params_list,
-                            body,
-                            env.clone(),
-                        )));
-                    }
-                    "if" => {
-                        let len = expr.as_ref().list_len();
-                        if len != 4 {
-                            return Err(ValRef::new_str("if requires 3 arguments"));
+                        "if" => {
+                            return eval_if(arena, expr, env);
                         }
-                        let cond_expr = expr
-                            .as_ref()
-                            .list_nth(1)
-                            .ok_or(ValRef::new_str("if missing condition"))?;
-                        let cond = eval(cond_expr, env)?;
-                        let is_true = match cond.as_ref() {
-                            Value::Bool(b) => *b,
-                            Value::Nil => false,
-                            _ => true,
-                        };
-                        let branch_idx = if is_true { 2 } else { 3 };
-                        let branch = expr
-                            .as_ref()
-                            .list_nth(branch_idx)
-                            .ok_or(ValRef::new_str("if missing branch"))?;
-                        return Ok(EvalResult::TailCall(branch, env.clone()));
-                    }
-                    "quote" => {
-                        let len = expr.as_ref().list_len();
-                        if len != 2 {
-                            return Err(ValRef::new_str("quote requires 1 argument"));
+                        "lambda" => {
+                            return eval_lambda(arena, expr, env);
                         }
-                        let quoted = expr
-                            .as_ref()
-                            .list_nth(1)
-                            .ok_or(ValRef::new_str("quote missing argument"))?;
-                        return Ok(EvalResult::Done(quoted));
+                        "define" => {
+                            return eval_define(arena, expr, env);
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
 
-            let func = eval(car, env)?;
+            // Function application
+            let func = eval(arena, car, env)?;
+            let args = eval_args(arena, expr, env)?;
+            let result = apply(arena, func, args, env)?;
+            arena.decref(func);
+            arena.decref(args);
+            Ok(result)
+        }
+        Some(Value::Nil) => Ok(arena.nil()),
+        _ => Err(arena.str_to_list("Invalid expression")),
+    }
+}
 
-            let mut args = ValRef::nil();
-            let mut current = cdr;
+fn eval_if(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    if arena.list_len(expr) != 4 {
+        return Err(arena.str_to_list("if requires 3 args"));
+    }
+
+    let cond_expr = arena.list_nth(expr, 1).unwrap();
+    let cond = eval(arena, cond_expr, env)?;
+
+    let is_true = match arena.get(cond) {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Nil) => false,
+        _ => true,
+    };
+
+    arena.decref(cond);
+
+    let branch = if is_true {
+        arena.list_nth(expr, 2).unwrap()
+    } else {
+        arena.list_nth(expr, 3).unwrap()
+    };
+
+    eval(arena, branch, env)
+}
+
+fn eval_lambda(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    if arena.list_len(expr) != 3 {
+        return Err(arena.str_to_list("lambda requires 2 args"));
+    }
+
+    let params = arena.list_nth(expr, 1).unwrap();
+    let body = arena.list_nth(expr, 2).unwrap();
+
+    Ok(arena.lambda(params, body, env))
+}
+
+fn eval_define(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    if arena.list_len(expr) != 3 {
+        return Err(arena.str_to_list("define requires 2 args"));
+    }
+
+    let name = arena.list_nth(expr, 1).unwrap();
+    let name_sym = if let Some(Value::Symbol(s)) = arena.get(name) {
+        *s
+    } else {
+        return Err(arena.str_to_list("define needs symbol"));
+    };
+
+    let value_expr = arena.list_nth(expr, 2).unwrap();
+    let value = eval(arena, value_expr, env)?;
+
+    env_set(arena, env, name_sym, value);
+    arena.incref(value);
+    Ok(value)
+}
+
+fn eval_args(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    let mut result = arena.nil();
+    let mut current = if let Some(Value::Cons(_, cdr)) = arena.get(expr).copied() {
+        cdr
+    } else {
+        return Ok(result);
+    };
+
+    loop {
+        match arena.get(current).copied() {
+            Some(Value::Cons(car, cdr)) => {
+                let val = eval(arena, car, env)?;
+                let new_result = arena.cons(val, result);
+                arena.decref(val);
+                arena.decref(result);
+                result = new_result;
+                current = cdr;
+            }
+            Some(Value::Nil) => break,
+            _ => {
+                arena.decref(result);
+                return Err(arena.str_to_list("Invalid args"));
+            }
+        }
+    }
+
+    Ok(arena.reverse_list(result))
+}
+
+fn apply(
+    arena: &mut Arena,
+    func: ArenaRef,
+    args: ArenaRef,
+    _env: ArenaRef,
+) -> Result<ArenaRef, ArenaRef> {
+    match arena.get(func).copied() {
+        Some(Value::Builtin(idx)) => call_builtin(arena, idx, args),
+        Some(Value::Lambda(params, body, lambda_env)) => {
+            let call_env = env_with_parent(arena, lambda_env);
+
+            let mut p = params;
+            let mut a = args;
+
             loop {
-                match current.as_ref() {
-                    Value::Cons(arg_cell) => {
-                        let (arg_car, arg_cdr) = arg_cell.borrow().clone();
-                        let evaled = eval(arg_car, env)?;
-                        args = ValRef::cons(evaled, args);
-                        current = arg_cdr;
-                    }
-                    Value::Nil => break,
-                    _ => return Err(ValRef::new_str("Malformed argument list")),
-                }
-            }
-            args = reverse_list(args);
-
-            match func.as_ref() {
-                Value::Builtin(f) => Ok(EvalResult::Done(f(&args)?)),
-                Value::Lambda {
-                    params,
-                    body,
-                    env: lambda_env,
-                } => {
-                    let param_count = params.as_ref().list_len();
-                    let arg_count = args.as_ref().list_len();
-
-                    if arg_count != param_count {
-                        return Err(ValRef::new_str("Lambda argument count mismatch"));
-                    }
-
-                    let call_env = env_with_parent(lambda_env.clone());
-
-                    let mut param_cur = params.clone();
-                    let mut arg_cur = args.clone();
-
-                    loop {
-                        match (param_cur.as_ref(), arg_cur.as_ref()) {
-                            (Value::Cons(p_cell), Value::Cons(a_cell)) => {
-                                let (p_car, p_cdr) = p_cell.borrow().clone();
-                                let (a_car, a_cdr) = a_cell.borrow().clone();
-                                if let Value::Symbol(param_name) = p_car.as_ref() {
-                                    env_set(&call_env, param_name.clone(), a_car);
-                                }
-                                param_cur = p_cdr;
-                                arg_cur = a_cdr;
-                            }
-                            (Value::Nil, Value::Nil) => break,
-                            _ => {
-                                return Err(ValRef::new_str("Parameter/argument mismatch"));
-                            }
+                match (arena.get(p).copied(), arena.get(a).copied()) {
+                    (Some(Value::Cons(p_car, p_cdr)), Some(Value::Cons(a_car, a_cdr))) => {
+                        if let Some(Value::Symbol(name)) = arena.get(p_car) {
+                            env_set(arena, call_env, *name, a_car);
                         }
+                        p = p_cdr;
+                        a = a_cdr;
                     }
-
-                    Ok(EvalResult::TailCall(body.clone(), call_env))
-                }
-                _ => Err(ValRef::new_str("Cannot call non-function")),
-            }
-        }
-        Value::Nil => Ok(EvalResult::Done(ValRef::nil())),
-    }
-}
-
-pub fn eval(mut expr: ValRef, env: &ValRef) -> Result<ValRef, ValRef> {
-    let mut current_env = env.clone();
-
-    loop {
-        match eval_step(expr, &current_env)? {
-            EvalResult::Done(val) => return Ok(val),
-            EvalResult::TailCall(new_expr, new_env) => {
-                expr = new_expr;
-                current_env = new_env;
-            }
-        }
-    }
-}
-
-// ============================================================================
-// Built-in Functions
-// ============================================================================
-
-fn builtin_add(args: &ValRef) -> Result<ValRef, ValRef> {
-    let mut result: i64 = 0;
-    let mut current = args.clone();
-
-    loop {
-        match current.as_ref() {
-            Value::Cons(cell) => {
-                let (car, cdr) = cell.borrow().clone();
-                let num = car
-                    .as_number()
-                    .ok_or(ValRef::new_str("+ requires numbers"))?;
-                result = result
-                    .checked_add(num)
-                    .ok_or(ValRef::new_str("Integer overflow"))?;
-                current = cdr;
-            }
-            Value::Nil => break,
-            _ => return Err(ValRef::new_str("Invalid argument list")),
-        }
-    }
-
-    Ok(ValRef::number(result))
-}
-
-fn builtin_sub(args: &ValRef) -> Result<ValRef, ValRef> {
-    let len = args.as_ref().list_len();
-    if len == 0 {
-        return Err(ValRef::new_str("- requires at least 1 argument"));
-    }
-
-    let first = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or(ValRef::new_str("- missing first argument"))?;
-    let first_num = first
-        .as_number()
-        .ok_or(ValRef::new_str("- requires numbers"))?;
-
-    if len == 1 {
-        return Ok(ValRef::number(
-            first_num
-                .checked_neg()
-                .ok_or(ValRef::new_str("Integer overflow"))?,
-        ));
-    }
-
-    let mut result = first_num;
-    let mut current = args.clone();
-    if let Value::Cons(cell) = current.as_ref() {
-        let (_, rest) = cell.borrow().clone();
-        current = rest;
-    }
-
-    loop {
-        match current.as_ref() {
-            Value::Cons(cell) => {
-                let (car, cdr) = cell.borrow().clone();
-                let num = car
-                    .as_number()
-                    .ok_or(ValRef::new_str("- requires numbers"))?;
-                result = result
-                    .checked_sub(num)
-                    .ok_or(ValRef::new_str("Integer overflow"))?;
-                current = cdr;
-            }
-            Value::Nil => break,
-            _ => return Err(ValRef::new_str("Invalid argument list")),
-        }
-    }
-
-    Ok(ValRef::number(result))
-}
-
-fn builtin_mul(args: &ValRef) -> Result<ValRef, ValRef> {
-    let mut result: i64 = 1;
-    let mut current = args.clone();
-
-    loop {
-        match current.as_ref() {
-            Value::Cons(cell) => {
-                let (car, cdr) = cell.borrow().clone();
-                let num = car
-                    .as_number()
-                    .ok_or(ValRef::new_str("* requires numbers"))?;
-                result = result
-                    .checked_mul(num)
-                    .ok_or(ValRef::new_str("Integer overflow"))?;
-                current = cdr;
-            }
-            Value::Nil => break,
-            _ => return Err(ValRef::new_str("Invalid argument list")),
-        }
-    }
-
-    Ok(ValRef::number(result))
-}
-
-fn builtin_div(args: &ValRef) -> Result<ValRef, ValRef> {
-    let len = args.as_ref().list_len();
-    if len < 2 {
-        return Err(ValRef::new_str("/ requires at least 2 arguments"));
-    }
-
-    let first = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or(ValRef::new_str("/ missing first argument"))?;
-    let mut result = first
-        .as_number()
-        .ok_or(ValRef::new_str("/ requires numbers"))?;
-
-    let mut current = args.clone();
-    if let Value::Cons(cell) = current.as_ref() {
-        let (_, rest) = cell.borrow().clone();
-        current = rest;
-    }
-
-    loop {
-        match current.as_ref() {
-            Value::Cons(cell) => {
-                let (car, cdr) = cell.borrow().clone();
-                let num = car
-                    .as_number()
-                    .ok_or(ValRef::new_str("/ requires numbers"))?;
-                if num == 0 {
-                    return Err(ValRef::new_str("Division by zero"));
-                }
-                result = result
-                    .checked_div(num)
-                    .ok_or(ValRef::new_str("Integer overflow"))?;
-                current = cdr;
-            }
-            Value::Nil => break,
-            _ => return Err(ValRef::new_str("Invalid argument list")),
-        }
-    }
-
-    Ok(ValRef::number(result))
-}
-
-fn builtin_eq(args: &ValRef) -> Result<ValRef, ValRef> {
-    if args.as_ref().list_len() != 2 {
-        return Err(ValRef::new_str("= requires 2 arguments"));
-    }
-    let a = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or(ValRef::new_str("= missing arg 1"))?;
-    let b = args
-        .as_ref()
-        .list_nth(1)
-        .ok_or(ValRef::new_str("= missing arg 2"))?;
-    let a_num = a.as_number().ok_or(ValRef::new_str("= requires numbers"))?;
-    let b_num = b.as_number().ok_or(ValRef::new_str("= requires numbers"))?;
-    Ok(ValRef::bool_val(a_num == b_num))
-}
-
-fn builtin_lt(args: &ValRef) -> Result<ValRef, ValRef> {
-    if args.as_ref().list_len() != 2 {
-        return Err(ValRef::new_str("< requires 2 arguments"));
-    }
-    let a = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or(ValRef::new_str("< missing arg 1"))?;
-    let b = args
-        .as_ref()
-        .list_nth(1)
-        .ok_or(ValRef::new_str("< missing arg 2"))?;
-    let a_num = a.as_number().ok_or(ValRef::new_str("< requires numbers"))?;
-    let b_num = b.as_number().ok_or(ValRef::new_str("< requires numbers"))?;
-    Ok(ValRef::bool_val(a_num < b_num))
-}
-
-fn builtin_gt(args: &ValRef) -> Result<ValRef, ValRef> {
-    if args.as_ref().list_len() != 2 {
-        return Err(ValRef::new_str("> requires 2 arguments"));
-    }
-    let a = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or(ValRef::new_str("> missing arg 1"))?;
-    let b = args
-        .as_ref()
-        .list_nth(1)
-        .ok_or(ValRef::new_str("> missing arg 2"))?;
-    let a_num = a.as_number().ok_or(ValRef::new_str("> requires numbers"))?;
-    let b_num = b.as_number().ok_or(ValRef::new_str("> requires numbers"))?;
-    Ok(ValRef::bool_val(a_num > b_num))
-}
-
-fn builtin_list(args: &ValRef) -> Result<ValRef, ValRef> {
-    Ok(args.clone())
-}
-
-fn builtin_car(args: &ValRef) -> Result<ValRef, ValRef> {
-    if args.as_ref().list_len() != 1 {
-        return Err(ValRef::new_str("car requires 1 argument"));
-    }
-    let list = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or(ValRef::new_str("car missing argument"))?;
-    let cell = list
-        .as_cons()
-        .ok_or(ValRef::new_str("car requires a cons/list"))?;
-    let (car, _) = cell.borrow().clone();
-    Ok(car)
-}
-
-fn builtin_cdr(args: &ValRef) -> Result<ValRef, ValRef> {
-    if args.as_ref().list_len() != 1 {
-        return Err(ValRef::new_str("cdr requires 1 argument"));
-    }
-    let list = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or(ValRef::new_str("cdr missing argument"))?;
-    let cell = list
-        .as_cons()
-        .ok_or(ValRef::new_str("cdr requires a cons/list"))?;
-    let (_, cdr) = cell.borrow().clone();
-    Ok(cdr)
-}
-
-fn builtin_cons_fn(args: &ValRef) -> Result<ValRef, ValRef> {
-    if args.as_ref().list_len() != 2 {
-        return Err(ValRef::new_str("cons requires 2 arguments"));
-    }
-    let car = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or(ValRef::new_str("cons missing arg 1"))?;
-    let cdr = args
-        .as_ref()
-        .list_nth(1)
-        .ok_or(ValRef::new_str("cons missing arg 2"))?;
-    Ok(ValRef::cons(car, cdr))
-}
-
-fn builtin_null(args: &ValRef) -> Result<ValRef, ValRef> {
-    if args.as_ref().list_len() != 1 {
-        return Err(ValRef::new_str("null? requires 1 argument"));
-    }
-    let val = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or(ValRef::new_str("null? missing argument"))?;
-    Ok(ValRef::bool_val(val.is_nil()))
-}
-
-fn builtin_cons_p(args: &ValRef) -> Result<ValRef, ValRef> {
-    if args.as_ref().list_len() != 1 {
-        return Err(ValRef::new_str("cons? requires 1 argument"));
-    }
-    let val = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or(ValRef::new_str("cons? missing argument"))?;
-    Ok(ValRef::bool_val(val.as_cons().is_some()))
-}
-
-fn builtin_length(args: &ValRef) -> Result<ValRef, ValRef> {
-    if args.as_ref().list_len() != 1 {
-        return Err(ValRef::new_str("length requires 1 argument"));
-    }
-    let list = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or(ValRef::new_str("length missing argument"))?;
-    let len = list.as_ref().list_len();
-    Ok(ValRef::number(len as i64))
-}
-
-fn builtin_append(args: &ValRef) -> Result<ValRef, ValRef> {
-    let mut result = ValRef::nil();
-    let mut current = args.clone();
-
-    loop {
-        match current.as_ref() {
-            Value::Cons(cell) => {
-                let (list, rest) = cell.borrow().clone();
-                let mut list_cur = list;
-                loop {
-                    match list_cur.as_ref() {
-                        Value::Cons(item_cell) => {
-                            let (item, item_rest) = item_cell.borrow().clone();
-                            result = ValRef::cons(item, result);
-                            list_cur = item_rest;
-                        }
-                        Value::Nil => break,
-                        _ => break,
+                    (Some(Value::Nil), Some(Value::Nil)) => break,
+                    _ => {
+                        arena.decref(call_env);
+                        return Err(arena.str_to_list("Arg count mismatch"));
                     }
                 }
-                current = rest;
             }
-            Value::Nil => break,
-            _ => return Err(ValRef::new_str("Invalid argument list")),
+
+            let result = eval(arena, body, call_env)?;
+            arena.decref(call_env);
+            Ok(result)
         }
+        _ => Err(arena.str_to_list("Not callable")),
     }
-
-    Ok(reverse_list(result))
-}
-
-fn builtin_reverse(args: &ValRef) -> Result<ValRef, ValRef> {
-    if args.as_ref().list_len() != 1 {
-        return Err(ValRef::new_str("reverse requires 1 argument"));
-    }
-    let list = args
-        .as_ref()
-        .list_nth(0)
-        .ok_or(ValRef::new_str("reverse missing argument"))?;
-    Ok(reverse_list(list))
 }
 
 // ============================================================================
-// Public API
+// High-level API
 // ============================================================================
 
-pub fn eval_str(input: &str, env: &ValRef) -> Result<ValRef, ValRef> {
-    let expr = parse(input)?;
-    let result = eval(expr, env)?;
+pub fn eval_string(arena: &mut Arena, input: &str, env: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    let tokens = tokenize(arena, input)?;
+    let expr = parse(arena, tokens)?;
+    let result = eval(arena, expr, env)?;
+    arena.decref(tokens);
+    arena.decref(expr);
     Ok(result)
 }
 
-pub fn eval_str_multiple(input: &str, env: &ValRef) -> Result<ValRef, ValRef> {
-    let expressions = parse_multiple(input)?;
-    if expressions.is_nil() {
-        return Err(ValRef::new_str("No expressions to evaluate"));
-    }
+// ============================================================================
+// Example/Test
+// ============================================================================
 
-    let mut last_result = ValRef::nil();
-    let mut current = expressions;
+pub fn run_example() -> Result<(), ()> {
+    let mut arena = Arena::new();
+    let env = env_new(&mut arena);
 
-    loop {
-        match current.as_ref() {
-            Value::Cons(cell) => {
-                let (expr, rest) = cell.borrow().clone();
-                last_result = eval(expr, env)?;
-                current = rest;
-            }
-            Value::Nil => break,
-            _ => return Err(ValRef::new_str("Invalid expression list")),
+    // Test: (+ 1 2 3)
+    let result = eval_string(&mut arena, "(+ 1 2 3)", env);
+    if let Ok(val) = result {
+        if let Some(Value::Number(_n)) = arena.get(val) {
+            // Should be 6
+            arena.decref(val);
         }
     }
 
-    Ok(last_result)
-}
+    // Test: (define x 42)
+    let _ = eval_string(&mut arena, "(define x 42)", env);
 
-impl PartialEq for ValRef {
-    fn eq(&self, other: &Self) -> bool {
-        match (self.as_ref(), other.as_ref()) {
-            (Value::Number(a), Value::Number(b)) => a == b,
-            (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Char(a), Value::Char(b)) => a == b,
-            (Value::Symbol(a), Value::Symbol(b)) => a.str_eq(b),
-            (Value::Nil, Value::Nil) => true,
-            (Value::Cons(a_cell), Value::Cons(b_cell)) => {
-                let (a_car, a_cdr) = a_cell.borrow().clone();
-                let (b_car, b_cdr) = b_cell.borrow().clone();
-                a_car == b_car && a_cdr == b_cdr
-            }
-            (Value::Builtin(a), Value::Builtin(b)) => core::ptr::eq(a as *const _, b as *const _),
-            (
-                Value::Lambda {
-                    params: p1,
-                    body: b1,
-                    env: _,
-                },
-                Value::Lambda {
-                    params: p2,
-                    body: b2,
-                    env: _,
-                },
-            ) => p1 == p2 && b1 == b2,
-            _ => false,
+    // Test: (* x 2)
+    let result = eval_string(&mut arena, "(* x 2)", env);
+    if let Ok(val) = result {
+        if let Some(Value::Number(_n)) = arena.get(val) {
+            // Should be 84
+            arena.decref(val);
         }
     }
-}
 
-// Public function to create new environment
-pub fn new_env() -> ValRef {
-    env_new()
+    arena.decref(env);
+    Ok(())
 }
