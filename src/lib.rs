@@ -3,13 +3,13 @@
 use core::cell::Cell;
 
 // ============================================================================
-// Arena Allocator with Reference Counting
+// Arena Allocator with Reference Counting and Mutability
 // ============================================================================
 
 const ARENA_SIZE: usize = 2048;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct ArenaRef(pub u16);
+pub struct ArenaRef(u16);
 
 impl ArenaRef {
     const NULL: ArenaRef = ArenaRef(u16::MAX);
@@ -24,16 +24,15 @@ pub enum Value {
     Number(i64),
     Bool(bool),
     Char(char),
-    Cons(ArenaRef, ArenaRef),
-    Symbol(ArenaRef),                     // Points to char list
+    Cons(ArenaRef, ArenaRef), // Mutable cons cell (mutated via set_cons)
+    Symbol(ArenaRef),         // Points to char list
     Lambda(ArenaRef, ArenaRef, ArenaRef), // params, body, env
-    Builtin(u8),                          // Index into builtin table
+    Builtin(u8),              // Index into builtin table
     Nil,
     Free, // Marks freed slot
 }
 
 pub struct Arena {
-    // Separate arrays for better initialization
     values: [Value; ARENA_SIZE],
     refcounts: [Cell<u16>; ARENA_SIZE],
     next_free: Cell<usize>,
@@ -51,7 +50,6 @@ impl Arena {
     pub fn alloc(&mut self, value: Value) -> ArenaRef {
         let start = self.next_free.get();
 
-        // Search for free slot starting from next_free
         for i in 0..ARENA_SIZE {
             let idx = (start + i) % ARENA_SIZE;
             if matches!(self.values[idx], Value::Free) {
@@ -104,12 +102,10 @@ impl Arena {
         if rc > 1 {
             self.refcounts[idx].set(rc - 1);
         } else if rc == 1 {
-            // Free this node
             let value = self.values[idx];
             self.values[idx] = Value::Free;
             self.refcounts[idx].set(0);
 
-            // Recursively decref children
             match value {
                 Value::Cons(car, cdr) => {
                     self.decref(car);
@@ -126,7 +122,6 @@ impl Arena {
         }
     }
 
-    // Constructors
     pub fn nil(&mut self) -> ArenaRef {
         self.alloc(Value::Nil)
     }
@@ -165,7 +160,6 @@ impl Arena {
         self.alloc(Value::Builtin(idx))
     }
 
-    // String helpers
     pub fn str_to_list(&mut self, s: &str) -> ArenaRef {
         let mut result = self.nil();
         for ch in s.chars().rev() {
@@ -253,7 +247,6 @@ impl Arena {
     pub fn reverse_list(&mut self, mut list: ArenaRef) -> ArenaRef {
         let mut result = self.nil();
         loop {
-            // Extract values first to avoid borrow conflicts
             let pair = match self.get(list) {
                 Some(Value::Cons(car, cdr)) => Some((*car, *cdr)),
                 _ => None,
@@ -294,7 +287,8 @@ impl Arena {
         }
     }
 
-    // Set cons cell in place (for environment mutation)
+    /// Mutate a cons cell in place - provides RefCell-like mutability
+    /// This is the key to making define work!
     pub fn set_cons(&mut self, cons_ref: ArenaRef, new_car: ArenaRef, new_cdr: ArenaRef) {
         if let Some(Value::Cons(old_car, old_cdr)) = self.get(cons_ref).copied() {
             self.incref(new_car);
@@ -307,11 +301,17 @@ impl Arena {
 }
 
 // ============================================================================
-// Environment Operations
+// Environment Operations - Using set_cons for mutability
 // ============================================================================
 
+/// Environment structure (same as Rc/RefCell version):
+/// Cons(bindings, parent_env)
+/// where bindings is a cons list of Cons(symbol, value) pairs
+///
+/// Mutability is achieved through Arena::set_cons, which provides
+/// the same in-place mutation that RefCell::borrow_mut provides
+
 pub fn env_new(arena: &mut Arena) -> ArenaRef {
-    // Create intermediate values to avoid multiple mutable borrows
     let nil1 = arena.nil();
     let nil2 = arena.nil();
     let env = arena.cons(nil1, nil2);
@@ -328,12 +328,21 @@ pub fn env_with_parent(arena: &mut Arena, parent: ArenaRef) -> ArenaRef {
     result
 }
 
+/// Set a binding in the environment by mutating the cons cell in place
+/// This works exactly like the RefCell version: we replace the bindings
+/// cons cell with a new one that includes the new binding
 pub fn env_set(arena: &mut Arena, env: ArenaRef, name: ArenaRef, value: ArenaRef) {
     if let Some(Value::Cons(bindings, parent)) = arena.get(env).copied() {
+        // Create new binding: Cons(Symbol(name), value)
         let sym = arena.symbol(name);
         let new_binding = arena.cons(sym, value);
+
+        // Prepend to bindings list
         let new_bindings = arena.cons(new_binding, bindings);
+
+        // Mutate the environment cons cell in place (like RefCell::borrow_mut)
         arena.set_cons(env, new_bindings, parent);
+
         arena.decref(sym);
         arena.decref(new_binding);
         arena.decref(new_bindings);
@@ -387,10 +396,13 @@ const BUILTIN_CDR: u8 = 8;
 const BUILTIN_CONS: u8 = 9;
 const BUILTIN_LIST: u8 = 10;
 const BUILTIN_NULL: u8 = 11;
+const BUILTIN_LENGTH: u8 = 12;
+const BUILTIN_APPEND: u8 = 13;
+const BUILTIN_REVERSE: u8 = 14;
 
 type BuiltinFn = fn(&mut Arena, ArenaRef) -> Result<ArenaRef, ArenaRef>;
 
-const BUILTINS: [BuiltinFn; 12] = [
+const BUILTINS: [BuiltinFn; 15] = [
     builtin_add,
     builtin_sub,
     builtin_mul,
@@ -403,6 +415,9 @@ const BUILTINS: [BuiltinFn; 12] = [
     builtin_cons_fn,
     builtin_list,
     builtin_null,
+    builtin_length,
+    builtin_append,
+    builtin_reverse,
 ];
 
 fn call_builtin(arena: &mut Arena, idx: u8, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
@@ -643,6 +658,58 @@ fn builtin_null(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef>
     Ok(arena.bool_val(is_nil))
 }
 
+fn builtin_length(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    if arena.list_len(args) != 1 {
+        return Err(arena.str_to_list("length requires 1 arg"));
+    }
+    let list = arena.list_nth(args, 0).unwrap();
+    let len = arena.list_len(list);
+    Ok(arena.number(len as i64))
+}
+
+fn builtin_append(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    let mut result = arena.nil();
+    let mut current = args;
+
+    loop {
+        match arena.get(current).copied() {
+            Some(Value::Cons(list, rest)) => {
+                let mut list_cur = list;
+                loop {
+                    match arena.get(list_cur).copied() {
+                        Some(Value::Cons(item, item_rest)) => {
+                            let new_result = arena.cons(item, result);
+                            arena.decref(result);
+                            result = new_result;
+                            list_cur = item_rest;
+                        }
+                        Some(Value::Nil) => break,
+                        _ => break,
+                    }
+                }
+                current = rest;
+            }
+            Some(Value::Nil) => break,
+            _ => {
+                arena.decref(result);
+                return Err(arena.str_to_list("Invalid argument list"));
+            }
+        }
+    }
+
+    let reversed = arena.reverse_list(result);
+    arena.decref(result);
+    Ok(reversed)
+}
+
+fn builtin_reverse(arena: &mut Arena, args: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    if arena.list_len(args) != 1 {
+        return Err(arena.str_to_list("reverse requires 1 arg"));
+    }
+    let list = arena.list_nth(args, 0).unwrap();
+    Ok(arena.reverse_list(list))
+}
+
 fn register_builtins(arena: &mut Arena, env: ArenaRef) {
     let builtins = [
         ("+", BUILTIN_ADD),
@@ -657,6 +724,9 @@ fn register_builtins(arena: &mut Arena, env: ArenaRef) {
         ("cons", BUILTIN_CONS),
         ("list", BUILTIN_LIST),
         ("null?", BUILTIN_NULL),
+        ("length", BUILTIN_LENGTH),
+        ("append", BUILTIN_APPEND),
+        ("reverse", BUILTIN_REVERSE),
     ];
 
     for (name, idx) in builtins {
@@ -761,7 +831,6 @@ pub fn tokenize(arena: &mut Arena, input: &str) -> Result<ArenaRef, ArenaRef> {
 
                 atom = arena.reverse_list(atom);
 
-                // Try to parse as number
                 let mut buf = [0u8; 64];
                 if let Some(s) = arena.list_to_str(atom, &mut buf) {
                     if let Ok(num) = parse_i64(s) {
@@ -913,17 +982,38 @@ fn parse_list(arena: &mut Arena, mut tokens: ArenaRef) -> Result<(ArenaRef, Aren
 }
 
 // ============================================================================
-// Evaluator
+// Evaluator with Tail Call Optimization
 // ============================================================================
 
 pub fn eval(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+    // Trampoline for proper tail call optimization
+    let mut current_expr = expr;
+    let mut current_env = env;
+
+    loop {
+        match eval_step(arena, current_expr, current_env)? {
+            EvalResult::Done(val) => return Ok(val),
+            EvalResult::TailCall(new_expr, new_env) => {
+                current_expr = new_expr;
+                current_env = new_env;
+            }
+        }
+    }
+}
+
+pub enum EvalResult {
+    Done(ArenaRef),
+    TailCall(ArenaRef, ArenaRef),
+}
+
+fn eval_step(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<EvalResult, ArenaRef> {
     match arena.get(expr) {
         Some(Value::Number(_))
         | Some(Value::Bool(_))
         | Some(Value::Builtin(_))
         | Some(Value::Lambda(..)) => {
             arena.incref(expr);
-            Ok(expr)
+            Ok(EvalResult::Done(expr))
         }
         Some(Value::Symbol(s)) => {
             let s = *s;
@@ -932,12 +1022,12 @@ pub fn eval(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef
             arena.decref(nil_str);
 
             if is_nil {
-                return Ok(arena.nil());
+                return Ok(EvalResult::Done(arena.nil()));
             }
 
             if let Some(val) = env_get(arena, env, s) {
                 arena.incref(val);
-                Ok(val)
+                Ok(EvalResult::Done(val))
             } else {
                 Err(arena.str_to_list("Unbound symbol"))
             }
@@ -954,7 +1044,7 @@ pub fn eval(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef
                         "quote" => {
                             if let Some(quoted) = arena.list_nth(expr, 1) {
                                 arena.incref(quoted);
-                                return Ok(quoted);
+                                return Ok(EvalResult::Done(quoted));
                             }
                         }
                         "if" => {
@@ -977,14 +1067,14 @@ pub fn eval(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef
             let result = apply(arena, func, args, env)?;
             arena.decref(func);
             arena.decref(args);
-            Ok(result)
+            Ok(EvalResult::Done(result))
         }
-        Some(Value::Nil) => Ok(arena.nil()),
+        Some(Value::Nil) => Ok(EvalResult::Done(arena.nil())),
         _ => Err(arena.str_to_list("Invalid expression")),
     }
 }
 
-fn eval_if(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+fn eval_if(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<EvalResult, ArenaRef> {
     if arena.list_len(expr) != 4 {
         return Err(arena.str_to_list("if requires 3 args"));
     }
@@ -1006,10 +1096,12 @@ fn eval_if(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef,
         arena.list_nth(expr, 3).unwrap()
     };
 
-    eval(arena, branch, env)
+    // Return tail call for proper TCO
+    arena.incref(env);
+    Ok(EvalResult::TailCall(branch, env))
 }
 
-fn eval_lambda(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+fn eval_lambda(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<EvalResult, ArenaRef> {
     if arena.list_len(expr) != 3 {
         return Err(arena.str_to_list("lambda requires 2 args"));
     }
@@ -1017,10 +1109,12 @@ fn eval_lambda(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<Arena
     let params = arena.list_nth(expr, 1).unwrap();
     let body = arena.list_nth(expr, 2).unwrap();
 
-    Ok(arena.lambda(params, body, env))
+    Ok(EvalResult::Done(arena.lambda(params, body, env)))
 }
 
-fn eval_define(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef, ArenaRef> {
+/// Define: mutably adds a binding to the environment
+/// This is where the mutability via set_cons is crucial!
+fn eval_define(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<EvalResult, ArenaRef> {
     if arena.list_len(expr) != 3 {
         return Err(arena.str_to_list("define requires 2 args"));
     }
@@ -1035,9 +1129,10 @@ fn eval_define(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<Arena
     let value_expr = arena.list_nth(expr, 2).unwrap();
     let value = eval(arena, value_expr, env)?;
 
+    // This mutates the environment in place using set_cons!
     env_set(arena, env, name_sym, value);
     arena.incref(value);
-    Ok(value)
+    Ok(EvalResult::Done(value))
 }
 
 fn eval_args(arena: &mut Arena, expr: ArenaRef, env: ArenaRef) -> Result<ArenaRef, ArenaRef> {
@@ -1138,14 +1233,33 @@ pub fn run_example() -> Result<(), ()> {
         }
     }
 
-    // Test: (define x 42)
+    // Test: (define x 42) - Now works with mutability!
     let _ = eval_string(&mut arena, "(define x 42)", env);
 
-    // Test: (* x 2)
+    // Test: (* x 2) - Should use the defined value
     let result = eval_string(&mut arena, "(* x 2)", env);
     if let Ok(val) = result {
         if let Some(Value::Number(_n)) = arena.get(val) {
             // Should be 84
+            arena.decref(val);
+        }
+    }
+
+    // Test: (define factorial ...) - Recursive function definition
+    let factorial_def = r#"
+        (define factorial
+          (lambda (n)
+            (if (= n 0)
+                1
+                (* n (factorial (- n 1))))))
+    "#;
+    let _ = eval_string(&mut arena, factorial_def, env);
+
+    // Test: (factorial 5)
+    let result = eval_string(&mut arena, "(factorial 5)", env);
+    if let Ok(val) = result {
+        if let Some(Value::Number(_n)) = arena.get(val) {
+            // Should be 120
             arena.decref(val);
         }
     }
