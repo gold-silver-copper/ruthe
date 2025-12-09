@@ -1,766 +1,745 @@
-#![cfg(test)]
-use ruthe::*;
+use core::matches;
+use std::vec::Vec;
+// Import the module under test
+use ruthe::*; // Replace with actual crate name
 
 // ============================================================================
-// Stress Test Helpers - Adapted for Arena Allocator
+// Test Helpers
 // ============================================================================
+
+fn assert_refcount(arena: &Arena, r: ArenaRef, expected: u16) {
+    // This accesses internal state - in real code you might want to expose
+    // a debug method or use a test-only feature flag
+    let idx = r.0 as usize;
+    let actual = arena.refcounts[idx].get();
+    assert!(
+        actual == expected,
+        "Expected refcount {}, got {}",
+        expected,
+        actual
+    );
+}
 
 fn count_free_slots(arena: &Arena) -> usize {
     let mut count = 0;
-    for i in 0..2048 {
-        let r = ArenaRef(i as u16);
-        if let Some(Value::Free) = arena.get(r) {
+    for i in 0..ARENA_SIZE {
+        if matches!(arena.values[i].get(), Value::Free) {
             count += 1;
         }
     }
     count
 }
 
-fn count_used_slots(arena: &Arena) -> usize {
-    2048 - count_free_slots(arena)
-}
-
-// Helper function to evaluate with display string conversion
-fn eval_display(arena: &mut Arena, input: &str, env: ArenaRef) -> Result<String, String> {
-    eval_string(arena, input, env)
-        .map(|val| {
-            let mut buf = [0u8; 4096];
-            if let Some(Value::Number(n)) = arena.get(val) {
-                let mut temp = [0u8; 32];
-                let mut idx = 0;
-                let mut num = *n;
-                let negative = num < 0;
-                if negative {
-                    num = -num;
-                }
-                if num == 0 {
-                    temp[idx] = b'0';
-                    idx += 1;
-                } else {
-                    let mut divisor = 1i64;
-                    let mut temp_num = num;
-                    while temp_num >= 10 {
-                        divisor *= 10;
-                        temp_num /= 10;
-                    }
-                    while divisor > 0 {
-                        let digit = (num / divisor) as u8;
-                        temp[idx] = b'0' + digit;
-                        idx += 1;
-                        num %= divisor;
-                        divisor /= 10;
-                    }
-                }
-                if negative {
-                    buf[0] = b'-';
-                    for i in 0..idx {
-                        buf[i + 1] = temp[i];
-                    }
-                    idx += 1;
-                } else {
-                    for i in 0..idx {
-                        buf[i] = temp[i];
-                    }
-                }
-                core::str::from_utf8(&buf[..idx]).unwrap().to_string()
-            } else if let Some(Value::Bool(b)) = arena.get(val) {
-                if *b {
-                    "#t".to_string()
-                } else {
-                    "#f".to_string()
-                }
-            } else {
-                "ok".to_string()
-            }
-        })
-        .map_err(|e| {
-            let mut buf = [0u8; 256];
-            arena
-                .list_to_str(e, &mut buf)
-                .unwrap_or("error")
-                .to_string()
-        })
-}
-
 // ============================================================================
-// Extreme Recursion Tests - Testing TCO & Memory
+// Basic Allocation Tests
 // ============================================================================
 
 #[test]
-fn test_extreme_tail_recursion() {
-    // Test that tail call optimization truly works without stack overflow
-    // Reduced from 10000 to fit in arena
-    let program = r#"
-        ((lambda (countdown)
-           (countdown countdown 1000 0))
-         (lambda (self n acc)
-           (if (= n 0)
-               acc
-               (self self (- n 1) (+ acc 1)))))
-    "#;
+fn test_basic_allocation() {
+    let arena = Arena::new();
 
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-    let initial_used = count_used_slots(&arena);
+    // Initially all slots should be free
+    assert!(count_free_slots(&arena) == ARENA_SIZE);
 
-    let result = eval_display(&mut arena, program, env);
-    assert_eq!(result, Ok("1000".to_string()));
+    // Allocate a number
+    let num = arena.number(42);
+    assert!(count_free_slots(&arena) == ARENA_SIZE - 1);
 
-    arena.decref(env);
-    let final_used = count_used_slots(&arena);
-
-    // Should have cleaned up most allocations
-    assert!(
-        final_used < initial_used + 50,
-        "Extreme recursion didn't clean up properly: {} -> {}",
-        initial_used,
-        final_used
-    );
-}
-
-#[test]
-fn test_deep_tail_recursion() {
-    // Push tail call optimization to limits (reduced for arena size)
-    let program = r#"
-        ((lambda (sum-to)
-           (sum-to sum-to 500 0))
-         (lambda (self n acc)
-           (if (= n 0)
-               acc
-               (self self (- n 1) (+ acc n)))))
-    "#;
-
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-
-    let result = eval_string(&mut arena, program, env);
-    assert!(result.is_ok(), "Deep tail recursion failed");
-
-    if let Ok(val) = result {
-        arena.decref(val);
+    // Verify value
+    if let Some(Value::Number(n)) = arena.get(*num) {
+        assert!(n == 42);
+    } else {
+        panic!("Expected Number(42)");
     }
-    arena.decref(env);
 }
 
 #[test]
-fn test_mutual_recursion_deep() {
-    // Test deep mutual recursion doesn't leak (reduced size)
-    let program = r#"
-        ((lambda (make-even-odd)
-           ((car (make-even-odd make-even-odd)) 100))
-         (lambda (self)
-           (cons
-             (lambda (n)
-               (if (= n 0) #t ((cdr (self self)) (- n 1))))
-             (lambda (n)
-               (if (= n 0) #f ((car (self self)) (- n 1)))))))
-    "#;
+fn test_multiple_allocations() {
+    let arena = Arena::new();
 
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-    let initial_used = count_used_slots(&arena);
+    let n1 = arena.number(1);
+    let n2 = arena.number(2);
+    let n3 = arena.number(3);
 
-    let result = eval_string(&mut arena, program, env);
-    assert!(result.is_ok(), "Mutual recursion failed");
+    assert!(count_free_slots(&arena) == ARENA_SIZE - 3);
 
-    if let Ok(val) = result {
-        arena.decref(val);
+    if let Some(Value::Number(n)) = arena.get(*n1) {
+        assert!(n == 1);
     }
-    arena.decref(env);
-
-    let final_used = count_used_slots(&arena);
-    assert!(
-        final_used < initial_used + 50,
-        "Mutual recursion didn't clean up: {} -> {}",
-        initial_used,
-        final_used
-    );
+    if let Some(Value::Number(n)) = arena.get(*n2) {
+        assert!(n == 2);
+    }
+    if let Some(Value::Number(n)) = arena.get(*n3) {
+        assert!(n == 3);
+    }
 }
 
 // ============================================================================
-// Environment Chain Stress Tests
+// Reference Counting Tests
 // ============================================================================
 
 #[test]
-fn test_deeply_nested_scopes() {
-    // Create deeply nested lambda scopes
-    let program = r#"
-        ((lambda (nest)
-           (nest nest 50))
-         (lambda (self n)
-           (if (= n 0)
-               42
-               ((lambda (x) (self self (- n 1))) n))))
-    "#;
+fn test_initial_refcount() {
+    let arena = Arena::new();
+    let num = arena.number(100);
 
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-    let initial_used = count_used_slots(&arena);
-
-    let result = eval_display(&mut arena, program, env);
-    assert_eq!(result, Ok("42".to_string()));
-
-    arena.decref(env);
-    let final_used = count_used_slots(&arena);
-
-    assert!(
-        final_used < initial_used + 100,
-        "Nested scopes leaked: {} -> {}",
-        initial_used,
-        final_used
-    );
+    // New allocation should have refcount of 1
+    assert_refcount(&arena, *num, 1);
 }
 
 #[test]
-fn test_multiple_closures_same_env() {
-    // Multiple closures capturing the same environment
-    let program = r#"
-        ((lambda (x)
-           ((lambda (f1 f2 f3)
-              (+ (f1) (f2) (f3)))
-            (lambda () x)
-            (lambda () (+ x 1))
-            (lambda () (* x 2))))
-         100)
-    "#;
+fn test_clone_increments_refcount() {
+    let arena = Arena::new();
+    let num = arena.number(100);
 
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-    let initial_used = count_used_slots(&arena);
+    assert_refcount(&arena, *num, 1);
 
-    let result = eval_display(&mut arena, program, env);
-    assert_eq!(result, Ok("401".to_string()));
+    let num2 = num.clone();
+    assert_refcount(&arena, *num, 2);
 
-    arena.decref(env);
-    let final_used = count_used_slots(&arena);
+    let num3 = num.clone();
+    assert_refcount(&arena, *num, 3);
 
-    assert!(
-        final_used < initial_used + 50,
-        "Multiple closures leaked: {} -> {}",
-        initial_used,
-        final_used
-    );
+    // All refs point to same value
+    assert!(num.raw().0 == num2.raw().0);
+    assert!(num.raw().0 == num3.raw().0);
 }
 
 #[test]
-fn test_chain_of_environments() {
-    // Test that parent environment chains don't leak
-    let program = r#"
-        ((lambda (make-adder)
-           ((lambda (add5)
-              ((lambda (add5and10)
-                 (add5and10 20))
-               (add5 10)))
-            (make-adder 5)))
-         (lambda (x)
-           (lambda (y)
-             (lambda (z)
-               (+ x (+ y z))))))
-    "#;
+fn test_drop_decrements_refcount() {
+    let arena = Arena::new();
+    let num = arena.number(100);
+    let r = *num;
 
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-    let initial_used = count_used_slots(&arena);
+    assert_refcount(&arena, r, 1);
 
-    let result = eval_display(&mut arena, program, env);
-    assert_eq!(result, Ok("35".to_string()));
-
-    arena.decref(env);
-    let final_used = count_used_slots(&arena);
-
-    assert!(
-        final_used < initial_used + 50,
-        "Environment chain leaked: {} -> {}",
-        initial_used,
-        final_used
-    );
-}
-
-// ============================================================================
-// Massive Data Structure Tests
-// ============================================================================
-
-#[test]
-fn test_large_list_creation_and_destruction() {
-    // Create a large list and ensure it's cleaned up (reduced size for arena)
-    let program = r#"
-        ((lambda (build-list)
-           ((lambda (big-list)
-              (length big-list))
-            (build-list build-list 200 nil)))
-         (lambda (self n acc)
-           (if (= n 0)
-               acc
-               (self self (- n 1) (cons n acc)))))
-    "#;
-
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-    let initial_used = count_used_slots(&arena);
-
-    let result = eval_display(&mut arena, program, env);
-    assert_eq!(result, Ok("200".to_string()));
-
-    arena.decref(env);
-    let final_used = count_used_slots(&arena);
-
-    assert!(
-        final_used < initial_used + 50,
-        "Large list leaked: {} -> {}",
-        initial_used,
-        final_used
-    );
-}
-
-#[test]
-fn test_repeated_large_allocations() {
-    // Repeatedly create and destroy structures
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-
-    let make_list_program = r#"
-        (lambda (self n)
-          (if (= n 0)
-              nil
-              (cons n (self self (- n 1)))))
-    "#;
-
-    let make_list = eval_string(&mut arena, make_list_program, env).unwrap();
-    let count_after_define = count_used_slots(&arena);
-
-    // Create lists multiple times (smaller lists for arena)
-    for _ in 0..5 {
-        let list = eval_string(
-            &mut arena,
-            "((lambda (f) (f f 50)) (lambda (self n) (if (= n 0) nil (cons n (self self (- n 1))))))",
-            env,
-        );
-        if let Ok(val) = list {
-            arena.decref(val);
-        }
+    {
+        let num2 = num.clone();
+        assert_refcount(&arena, r, 2);
+        // num2 drops here
     }
 
-    arena.decref(make_list);
-    arena.decref(env);
-
-    let final_used = count_used_slots(&arena);
-    assert!(
-        final_used <= count_after_define + 100,
-        "Repeated allocations leaked: {} -> {}",
-        count_after_define,
-        final_used
-    );
-}
-
-// ============================================================================
-// Repeated Operations Tests
-// ============================================================================
-
-#[test]
-fn test_repeated_lambda_creation() {
-    // Creating lambdas repeatedly shouldn't accumulate references
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-
-    let initial_used = count_used_slots(&arena);
-
-    for i in 0..20 {
-        let program = format!("((lambda (n) (lambda (x) (+ x n))) {})", i);
-        let result = eval_string(&mut arena, &program, env);
-        if let Ok(closure) = result {
-            // Call the closure
-            let call_program = format!("((lambda (f) (f 10)) (lambda (x) (+ x {})))", i);
-            let call_result = eval_string(&mut arena, &call_program, env);
-            if let Ok(val) = call_result {
-                arena.decref(val);
-            }
-            arena.decref(closure);
-        }
-    }
-
-    arena.decref(env);
-    let final_used = count_used_slots(&arena);
-
-    assert!(
-        final_used < initial_used + 100,
-        "Repeated lambda creation leaked: {} -> {}",
-        initial_used,
-        final_used
-    );
+    assert_refcount(&arena, r, 1);
 }
 
 #[test]
-fn test_repeated_recursive_calls() {
-    // Calling recursive functions repeatedly shouldn't leak
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
+fn test_full_deallocation() {
+    let arena = Arena::new();
 
-    let fib_program = r#"
-        (lambda (self n)
-          (if (< n 2)
-              n
-              (+ (self self (- n 1)) (self self (- n 2)))))
-    "#;
-
-    let fib = eval_string(&mut arena, fib_program, env).unwrap();
-    let initial_used = count_used_slots(&arena);
-
-    // Call multiple times (smaller values for arena)
-    for _ in 0..5 {
-        let result = eval_string(
-            &mut arena,
-            "((lambda (f) (f f 8)) (lambda (self n) (if (< n 2) n (+ (self self (- n 1)) (self self (- n 2))))))",
-            env,
-        );
-        if let Ok(val) = result {
-            arena.decref(val);
-        }
-    }
-
-    arena.decref(fib);
-    arena.decref(env);
-
-    let final_used = count_used_slots(&arena);
-    assert!(
-        final_used < initial_used + 100,
-        "Repeated recursive calls leaked: {} -> {}",
-        initial_used,
-        final_used
-    );
-}
-
-// ============================================================================
-// Error Path Memory Tests
-// ============================================================================
-
-#[test]
-fn test_errors_dont_leak() {
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-    let initial_used = count_used_slots(&arena);
-
-    // Try many operations that will fail
-    for _ in 0..20 {
-        let _ = eval_string(&mut arena, "(/ 10 0)", env); // Division by zero
-        let _ = eval_string(&mut arena, "undefined-var", env); // Unbound variable
-        let _ = eval_string(&mut arena, "(car 5)", env); // Type error
-    }
-
-    arena.decref(env);
-    let final_used = count_used_slots(&arena);
-
-    assert!(
-        final_used < initial_used + 50,
-        "Error paths leaked: {} -> {}",
-        initial_used,
-        final_used
-    );
-}
-
-// ============================================================================
-// Arena Reference Counting Tests
-// ============================================================================
-
-#[test]
-fn test_arena_refcount_basic() {
-    let mut arena = Arena::new();
-
-    let val = arena.number(42);
-    // Refcount should be 1
-
-    arena.incref(val);
-    // Refcount should be 2
-
-    arena.decref(val);
-    // Refcount should be 1
-
-    arena.decref(val);
-    // Should be freed now
-
-    // Value should be free
-    assert!(matches!(arena.get(val), Some(Value::Free) | None));
-}
-
-#[test]
-fn test_cons_cell_refcount() {
-    let mut arena = Arena::new();
-
-    let head = arena.number(1);
-    let tail = arena.number(2);
-    let cons = arena.cons(head, tail);
-
-    // cons increments refs, so head and tail have refcount 2
-    // Decref them to get back to 1
-    arena.decref(head);
-    arena.decref(tail);
-
-    // Now decref the cons
-    arena.decref(cons);
-
-    // All should be freed
-    assert!(matches!(arena.get(head), Some(Value::Free) | None));
-    assert!(matches!(arena.get(tail), Some(Value::Free) | None));
-    assert!(matches!(arena.get(cons), Some(Value::Free) | None));
-}
-
-// ============================================================================
-// Stress Test: Combined Operations
-// ============================================================================
-
-#[test]
-fn test_kitchen_sink_stress() {
-    // Combine many operations in one test (reduced sizes)
-    let program = r#"
-        ((lambda (fact fib)
-           (+ (fact fact 8 1) (fib fib 8)))
-         (lambda (self n acc)
-           (if (= n 0) acc (self self (- n 1) (* n acc))))
-         (lambda (self n)
-           (if (< n 2) n (+ (self self (- n 1)) (self self (- n 2))))))
-    "#;
-
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-    let initial_used = count_used_slots(&arena);
-
-    let result = eval_string(&mut arena, program, env);
-    assert!(result.is_ok(), "Kitchen sink failed");
-
-    if let Ok(val) = result {
-        arena.decref(val);
-    }
-    arena.decref(env);
-
-    let final_used = count_used_slots(&arena);
-    assert!(
-        final_used < initial_used + 100,
-        "Kitchen sink leaked: {} -> {}",
-        initial_used,
-        final_used
-    );
-}
-
-#[test]
-fn test_many_small_operations() {
-    // Many small operations shouldn't accumulate memory
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-    let initial_used = count_used_slots(&arena);
-
-    for i in 0..50 {
-        let r1 = eval_string(&mut arena, &format!("(+ {} {})", i, i + 1), env);
-        if let Ok(val) = r1 {
-            arena.decref(val);
-        }
-
-        let r2 = eval_string(&mut arena, &format!("(* {} 2)", i), env);
-        if let Ok(val) = r2 {
-            arena.decref(val);
-        }
-
-        let r3 = eval_string(&mut arena, &format!("(< {} 50)", i), env);
-        if let Ok(val) = r3 {
-            arena.decref(val);
-        }
-    }
-
-    arena.decref(env);
-    let final_used = count_used_slots(&arena);
-
-    assert!(
-        final_used < initial_used + 50,
-        "Many small operations leaked: {} -> {}",
-        initial_used,
-        final_used
-    );
-}
-
-// ============================================================================
-// Edge Case Tests
-// ============================================================================
-
-#[test]
-fn test_empty_operations() {
-    // Operations with literals shouldn't accumulate
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-    let initial_used = count_used_slots(&arena);
-
-    for _ in 0..50 {
-        let r1 = eval_string(&mut arena, "42", env);
-        if let Ok(val) = r1 {
-            arena.decref(val);
-        }
-
-        let r2 = eval_string(&mut arena, "#t", env);
-        if let Ok(val) = r2 {
-            arena.decref(val);
-        }
-
-        let r3 = eval_string(&mut arena, "nil", env);
-        if let Ok(val) = r3 {
-            arena.decref(val);
-        }
-    }
-
-    arena.decref(env);
-    let final_used = count_used_slots(&arena);
-
-    assert!(
-        final_used < initial_used + 20,
-        "Empty operations leaked: {} -> {}",
-        initial_used,
-        final_used
-    );
-}
-
-#[test]
-fn test_immediate_drop_stress() {
-    // Create and immediately drop many arenas
-    for _ in 0..50 {
-        let mut arena = Arena::new();
-        let env = env_new(&mut arena);
-        let result = eval_string(&mut arena, "(+ 1 2)", env);
-        if let Ok(val) = result {
-            arena.decref(val);
-        }
-        arena.decref(env);
-    }
-    // If we get here without crashing, memory management is working
-}
-
-#[test]
-fn test_nested_quote_structures() {
-    // Quoted structures shouldn't leak
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-    let initial_used = count_used_slots(&arena);
-
-    for _ in 0..20 {
-        let r1 = eval_string(&mut arena, "'(1 2 3 4 5)", env);
-        if let Ok(val) = r1 {
-            arena.decref(val);
-        }
-
-        let r2 = eval_string(&mut arena, "'((1 2) (3 4))", env);
-        if let Ok(val) = r2 {
-            arena.decref(val);
-        }
-    }
-
-    arena.decref(env);
-    let final_used = count_used_slots(&arena);
-
-    assert!(
-        final_used < initial_used + 50,
-        "Quoted structures leaked: {} -> {}",
-        initial_used,
-        final_used
-    );
-}
-
-// ============================================================================
-// Arena-Specific Tests
-// ============================================================================
-
-#[test]
-fn test_arena_size_limits() {
-    // Verify we can't allocate more than arena size
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-
-    // Try to create a very large list that might exceed arena
-    let program = r#"
-        ((lambda (build)
-           (build build 1500 nil))
-         (lambda (self n acc)
-           (if (= n 0)
-               acc
-               (self self (- n 1) (cons n acc)))))
-    "#;
-
-    // This might fail or succeed depending on arena pressure
-    let result = eval_string(&mut arena, program, env);
-
-    // Clean up regardless
-    if let Ok(val) = result {
-        arena.decref(val);
-    }
-    arena.decref(env);
-}
-
-#[test]
-fn test_arena_reuse() {
-    // Verify arena slots are reused after freeing
-    let mut arena = Arena::new();
     let initial_free = count_free_slots(&arena);
 
-    // Allocate and free many times
-    for _ in 0..10 {
-        let vals: [ArenaRef; 10] = [
-            arena.number(1),
-            arena.number(2),
-            arena.number(3),
-            arena.number(4),
-            arena.number(5),
-            arena.number(6),
-            arena.number(7),
-            arena.number(8),
-            arena.number(9),
-            arena.number(10),
-        ];
-
-        for val in vals {
-            arena.decref(val);
-        }
+    {
+        let _num = arena.number(100);
+        assert!(count_free_slots(&arena) == initial_free - 1);
     }
 
-    let final_free = count_free_slots(&arena);
+    // After drop, slot should be freed
+    assert!(count_free_slots(&arena) == initial_free);
+}
 
-    // Should have roughly the same number of free slots
-    assert!(
-        final_free >= initial_free - 5,
-        "Arena not reusing slots properly: {} -> {}",
-        initial_free,
-        final_free
-    );
+#[test]
+fn test_memory_reuse() {
+    let arena = Arena::new();
+
+    let r1 = {
+        let num = arena.number(100);
+        num.raw()
+    };
+
+    // Allocate again - might reuse same slot
+    let num2 = arena.number(200);
+
+    // Either same slot was reused, or a new one was allocated
+    // Both are valid
+    if num2.raw().0 == r1.0 {
+        // Slot was reused - verify new value
+        if let Some(Value::Number(n)) = arena.get(*num2) {
+            assert!(n == 200);
+        }
+    }
 }
 
 // ============================================================================
-// Final Boss: Maximum Stress Test
+// Cons Cell Tests (Recursive Deallocation)
 // ============================================================================
 
 #[test]
-fn test_maximum_stress() {
-    // The ultimate stress test - scaled for arena
-    let program = r#"
-        ((lambda (factorial sum-range)
-           (+ (factorial factorial 10 1) (sum-range sum-range 100 0)))
-         (lambda (self n acc)
-           (if (= n 0) acc (self self (- n 1) (* n acc))))
-         (lambda (self n acc)
-           (if (= n 0) acc (self self (- n 1) (+ acc n)))))
-    "#;
+fn test_cons_refcounting() {
+    let arena = Arena::new();
 
-    let mut arena = Arena::new();
-    let env = env_new(&mut arena);
-    let initial_used = count_used_slots(&arena);
+    let car = arena.number(1);
+    let cdr = arena.number(2);
 
-    // Run intensive operations multiple times
-    for _ in 0..5 {
-        let result = eval_string(&mut arena, program, env);
-        if let Ok(val) = result {
-            arena.decref(val);
+    let car_ref = *car;
+    let cdr_ref = *cdr;
+
+    assert_refcount(&arena, car_ref, 1);
+    assert_refcount(&arena, cdr_ref, 1);
+
+    // Creating cons increments children refcounts
+    let cons = arena.cons(&car, &cdr);
+
+    assert_refcount(&arena, car_ref, 2);
+    assert_refcount(&arena, cdr_ref, 2);
+
+    // Drop original refs
+    drop(car);
+    drop(cdr);
+
+    assert_refcount(&arena, car_ref, 1);
+    assert_refcount(&arena, cdr_ref, 1);
+
+    // Drop cons - should recursively decrement children
+    drop(cons);
+
+    // Children should be freed
+    assert!(matches!(arena.get(car_ref), None));
+    assert!(matches!(arena.get(cdr_ref), None));
+}
+
+#[test]
+fn test_nested_cons_deallocation() {
+    let arena = Arena::new();
+
+    let initial_free = count_free_slots(&arena);
+
+    {
+        // Create nested structure: ((1 . 2) . (3 . 4))
+        let a = arena.number(1);
+        let b = arena.number(2);
+        let c = arena.number(3);
+        let d = arena.number(4);
+
+        let left = arena.cons(&a, &b);
+        let right = arena.cons(&c, &d);
+        let _root = arena.cons(&left, &right);
+
+        // Should have: 4 numbers + 3 cons cells = 7 allocations
+        assert!(count_free_slots(&arena) == initial_free - 7);
+    }
+
+    // All should be freed
+    assert!(count_free_slots(&arena) == initial_free);
+}
+
+#[test]
+fn test_list_deallocation() {
+    let arena = Arena::new();
+
+    let initial_free = count_free_slots(&arena);
+
+    {
+        // Create list: (1 2 3)
+        let nil = arena.nil();
+        let three = arena.number(3);
+        let list1 = arena.cons(&three, &nil);
+        let two = arena.number(2);
+        let list2 = arena.cons(&two, &list1);
+        let one = arena.number(1);
+        let _list3 = arena.cons(&one, &list2);
+
+        // 3 numbers + 1 nil + 3 cons = 7 allocations
+        assert!(count_free_slots(&arena) == initial_free - 7);
+    }
+
+    assert!(count_free_slots(&arena) == initial_free);
+}
+
+// ============================================================================
+// Lambda Tests
+// ============================================================================
+
+#[test]
+fn test_lambda_refcounting() {
+    let arena = Arena::new();
+
+    let params = arena.nil();
+    let body = arena.number(42);
+    let env = arena.nil();
+
+    let params_ref = *params;
+    let body_ref = *body;
+    let env_ref = *env;
+
+    assert_refcount(&arena, params_ref, 1);
+    assert_refcount(&arena, body_ref, 1);
+    assert_refcount(&arena, env_ref, 1);
+
+    let lambda = arena.lambda(&params, &body, &env);
+
+    // Lambda should increment all three
+    assert_refcount(&arena, params_ref, 2);
+    assert_refcount(&arena, body_ref, 2);
+    assert_refcount(&arena, env_ref, 2);
+
+    drop(params);
+    drop(body);
+    drop(env);
+
+    assert_refcount(&arena, params_ref, 1);
+    assert_refcount(&arena, body_ref, 1);
+    assert_refcount(&arena, env_ref, 1);
+
+    drop(lambda);
+
+    // All should be freed
+    assert!(matches!(arena.get(params_ref), None));
+    assert!(matches!(arena.get(body_ref), None));
+    assert!(matches!(arena.get(env_ref), None));
+}
+
+// ============================================================================
+// Symbol Tests
+// ============================================================================
+
+#[test]
+fn test_symbol_refcounting() {
+    let arena = Arena::new();
+
+    let str_list = arena.str_to_list("foo");
+    let str_ref = *str_list;
+
+    assert_refcount(&arena, str_ref, 1);
+
+    let sym = arena.symbol(&str_list);
+
+    // Symbol should increment string list refcount
+    assert_refcount(&arena, str_ref, 2);
+
+    drop(str_list);
+    assert_refcount(&arena, str_ref, 1);
+
+    drop(sym);
+
+    // String list should be freed (along with all its cons cells)
+    assert!(matches!(arena.get(str_ref), None));
+}
+
+// ============================================================================
+// Edge Cases
+// ============================================================================
+
+#[test]
+fn test_null_ref_handling() {
+    let arena = Arena::new();
+
+    // NULL refs should be handled gracefully
+    let null = ArenaRef::NULL;
+
+    assert!(arena.get(null).is_none());
+    assert!(null.is_null());
+
+    // These should not panic
+    arena.incref(null);
+    arena.decref(null);
+}
+
+#[test]
+fn test_ref_new_from_existing() {
+    let arena = Arena::new();
+
+    let num = arena.number(100);
+    let raw = *num;
+
+    assert_refcount(&arena, raw, 1);
+
+    // Create new Ref from existing ArenaRef - should increment
+    let num2 = Ref::new(&arena, raw);
+    assert_refcount(&arena, raw, 2);
+
+    drop(num);
+    assert_refcount(&arena, raw, 1);
+
+    drop(num2);
+    assert!(matches!(arena.get(raw), None));
+}
+
+#[test]
+fn test_shared_children() {
+    let arena = Arena::new();
+
+    // Create a shared child
+    let shared = arena.number(42);
+    let shared_ref = *shared;
+
+    assert_refcount(&arena, shared_ref, 1);
+
+    // Two cons cells share the same cdr
+    let cons1 = arena.cons(&arena.number(1), &shared);
+    let cons2 = arena.cons(&arena.number(2), &shared);
+
+    // shared should have refcount of 3 (original + 2 cons cells)
+    assert_refcount(&arena, shared_ref, 3);
+
+    drop(shared);
+    assert_refcount(&arena, shared_ref, 2);
+
+    drop(cons1);
+    assert_refcount(&arena, shared_ref, 1);
+
+    drop(cons2);
+    assert!(matches!(arena.get(shared_ref), None));
+}
+
+#[test]
+fn test_set_cons_refcounting() {
+    let arena = Arena::new();
+
+    let car1 = arena.number(1);
+    let cdr1 = arena.number(2);
+    let cons = arena.cons(&car1, &cdr1);
+
+    let car1_ref = *car1;
+    let cdr1_ref = *cdr1;
+
+    // Original children have refcount 2
+    assert_refcount(&arena, car1_ref, 2);
+    assert_refcount(&arena, cdr1_ref, 2);
+
+    // Create new children
+    let car2 = arena.number(3);
+    let cdr2 = arena.number(4);
+    let car2_ref = *car2;
+    let cdr2_ref = *cdr2;
+
+    // Set cons to new values
+    arena.set_cons(&cons, &car2, &cdr2);
+
+    // Old children should be decremented (back to 1)
+    assert_refcount(&arena, car1_ref, 1);
+    assert_refcount(&arena, cdr1_ref, 1);
+
+    // New children should be incremented (to 2)
+    assert_refcount(&arena, car2_ref, 2);
+    assert_refcount(&arena, cdr2_ref, 2);
+
+    // Verify cons contains new values
+    if let Some(Value::Cons(car, cdr)) = arena.get(*cons) {
+        assert!(car.0 == car2_ref.0);
+        assert!(cdr.0 == cdr2_ref.0);
+    } else {
+        panic!("Expected Cons");
+    }
+}
+
+#[test]
+fn test_arena_exhaustion() {
+    let arena = Arena::new();
+
+    let mut refs = Vec::new();
+
+    // Allocate until arena is full
+    for i in 0..ARENA_SIZE {
+        let num = arena.number(i as i64);
+        refs.push(num);
+    }
+
+    assert!(count_free_slots(&arena) == 0);
+
+    // Next allocation should fail
+    let overflow = arena.number(9999);
+    assert!(overflow.is_null());
+
+    // Free one slot
+    refs.pop();
+    assert!(count_free_slots(&arena) == 1);
+
+    // Now allocation should succeed
+    let new_num = arena.number(8888);
+    assert!(!new_num.is_null());
+}
+
+#[test]
+fn test_refcount_overflow_protection() {
+    let arena = Arena::new();
+
+    let num = arena.number(100);
+    let raw = *num;
+
+    // Manually set refcount to near max
+    arena.refcounts[raw.0 as usize].set(u16::MAX - 1);
+
+    // This increment should succeed
+    arena.incref(raw);
+    assert_refcount(&arena, raw, u16::MAX);
+
+    // This increment should be a no-op (protection against overflow)
+    arena.incref(raw);
+    assert_refcount(&arena, raw, u16::MAX);
+}
+
+#[test]
+fn test_double_free_protection() {
+    let arena = Arena::new();
+
+    let num = arena.number(100);
+    let raw = *num;
+
+    drop(num);
+
+    // Slot should be free
+    assert!(matches!(arena.get(raw), None));
+
+    // Attempting to decref again should be safe
+    arena.decref(raw);
+
+    // Still free, no crash
+    assert!(matches!(arena.get(raw), None));
+}
+
+// ============================================================================
+// Complex Scenario Tests
+// ============================================================================
+
+#[test]
+fn test_complex_tree_structure() {
+    let arena = Arena::new();
+
+    let initial_free = count_free_slots(&arena);
+
+    {
+        // Build: (+ (* 2 3) (- 10 5))
+        let plus = arena.str_to_list("+");
+        let mult = arena.str_to_list("*");
+        let minus = arena.str_to_list("-");
+
+        let two = arena.number(2);
+        let three = arena.number(3);
+        let ten = arena.number(10);
+        let five = arena.number(5);
+
+        // (* 2 3)
+        let nil = arena.nil();
+        let mult_args2 = arena.cons(&three, &nil);
+        let mult_args1 = arena.cons(&two, &mult_args2);
+        let mult_expr = arena.cons(&mult, &mult_args1);
+
+        // (- 10 5)
+        let nil2 = arena.nil();
+        let minus_args2 = arena.cons(&five, &nil2);
+        let minus_args1 = arena.cons(&ten, &minus_args2);
+        let minus_expr = arena.cons(&minus, &minus_args1);
+
+        // (+ (* 2 3) (- 10 5))
+        let nil3 = arena.nil();
+        let plus_args2 = arena.cons(&minus_expr, &nil3);
+        let plus_args1 = arena.cons(&mult_expr, &plus_args2);
+        let _root = arena.cons(&plus, &plus_args1);
+
+        // Verify something was allocated
+        assert!(count_free_slots(&arena) < initial_free);
+    }
+
+    // Everything should be freed
+    assert!(count_free_slots(&arena) == initial_free);
+}
+
+#[test]
+fn test_string_list_refcounting() {
+    let arena = Arena::new();
+
+    let initial_free = count_free_slots(&arena);
+
+    {
+        let s = arena.str_to_list("hello");
+
+        // String "hello" creates: 5 chars + 5 cons cells + 1 nil = 11 allocations
+        // (Actually might be optimized differently, but should be > 5)
+        assert!(count_free_slots(&arena) < initial_free - 5);
+
+        // Clone should increment root cons refcount
+        let s2 = s.clone();
+        let raw = *s;
+        assert_refcount(&arena, raw, 2);
+
+        drop(s2);
+        assert_refcount(&arena, raw, 1);
+    }
+
+    // All should be freed
+    assert!(count_free_slots(&arena) == initial_free);
+}
+
+#[test]
+fn test_circular_references_prevention() {
+    let arena = Arena::new();
+
+    // Create two cons cells
+    let a_val = arena.number(1);
+    let b_val = arena.number(2);
+
+    let nil = arena.nil();
+    let a = arena.cons(&a_val, &nil);
+    let b = arena.cons(&b_val, &nil);
+
+    // Make a point to b and b point to a
+    arena.set_cons(&a, &a_val, &b);
+    arena.set_cons(&b, &b_val, &a);
+
+    let a_ref = *a;
+    let b_ref = *b;
+
+    // They should keep each other alive even after we drop our refs
+    drop(a);
+    drop(b);
+
+    // Both should still exist due to circular reference
+    // This is a KNOWN LIMITATION of reference counting
+    assert!(arena.get(a_ref).is_some());
+    assert!(arena.get(b_ref).is_some());
+
+    // Note: This demonstrates that circular refs will leak memory
+    // This is expected behavior for RC-based systems
+}
+
+#[test]
+fn test_ref_clone_semantics() {
+    let arena = Arena::new();
+
+    let num = arena.number(42);
+    let raw = *num;
+
+    assert_refcount(&arena, raw, 1);
+
+    // Clone creates independent ref with incremented count
+    let num2 = num.clone();
+    assert_refcount(&arena, raw, 2);
+
+    // Both refs are independent
+    drop(num);
+    assert_refcount(&arena, raw, 1);
+    assert!(arena.get(raw).is_some());
+
+    drop(num2);
+    assert!(arena.get(raw).is_none());
+}
+
+// ============================================================================
+// Helper Function Tests
+// ============================================================================
+
+#[test]
+fn test_list_len() {
+    let arena = Arena::new();
+
+    let nil = arena.nil();
+    assert!(arena.list_len(&nil) == 0);
+
+    let one = arena.number(1);
+    let list1 = arena.cons(&one, &nil);
+    assert!(arena.list_len(&list1) == 1);
+
+    let two = arena.number(2);
+    let list2 = arena.cons(&two, &list1);
+    assert!(arena.list_len(&list2) == 2);
+}
+
+#[test]
+fn test_reverse_list_refcounting() {
+    let arena = Arena::new();
+
+    // Build list (1 2 3)
+    let nil = arena.nil();
+    let three = arena.number(3);
+    let list1 = arena.cons(&three, &nil);
+    let two = arena.number(2);
+    let list2 = arena.cons(&two, &list1);
+    let one = arena.number(1);
+    let list3 = arena.cons(&one, &list2);
+
+    let initial_free = count_free_slots(&arena);
+
+    // Reverse creates new cons cells AND a new nil, but shares elements
+    let reversed = arena.reverse_list(&list3);
+
+    // Should have 3 new cons cells + 1 new nil = 4 allocations
+    assert!(count_free_slots(&arena) == initial_free - 4);
+
+    // Elements should have higher refcounts (in original list, reversed list, and our local refs)
+    let one_ref = *one;
+    let two_ref = *two;
+    let three_ref = *three;
+
+    // Each number appears in: original list + reversed list + our local variable = 3 references
+    assert_refcount(&arena, one_ref, 3);
+    assert_refcount(&arena, two_ref, 3);
+    assert_refcount(&arena, three_ref, 3);
+
+    drop(reversed);
+
+    // New cons cells and new nil freed, but elements still alive in original list
+    assert_refcount(&arena, one_ref, 2); // Original list + our local ref
+    assert_refcount(&arena, two_ref, 2);
+    assert_refcount(&arena, three_ref, 2);
+
+    // Drop original list
+    drop(list3);
+    drop(list2);
+    drop(list1);
+
+    // Now only our local refs remain
+    assert_refcount(&arena, one_ref, 1);
+    assert_refcount(&arena, two_ref, 1);
+    assert_refcount(&arena, three_ref, 1);
+}
+#[test]
+fn test_environment_refcounting() {
+    let arena = Arena::new();
+
+    let initial_free = count_free_slots(&arena);
+
+    {
+        let env = env_new(&arena);
+
+        // Env should allocate bindings list and builtins
+        assert!(count_free_slots(&arena) < initial_free);
+
+        // Add a binding
+        let name = arena.str_to_list("x");
+        let value = arena.number(42);
+        env_set(&arena, &env, &name, &value);
+
+        // Lookup should work
+        let retrieved = env_get(&arena, &env, &name);
+        assert!(retrieved.is_some());
+
+        if let Some(val) = retrieved {
+            if let Some(Value::Number(n)) = arena.get(*val) {
+                assert!(n == 42);
+            }
         }
     }
 
-    arena.decref(env);
-    let final_used = count_used_slots(&arena);
+    // Most should be freed (builtins might still be around depending on impl)
+    // At minimum, we shouldn't leak memory
+}
 
-    assert!(
-        final_used < initial_used + 100,
-        "Maximum stress test leaked: {} -> {}",
-        initial_used,
-        final_used
-    );
+// Run all tests
+pub fn run_all_tests() {
+    test_basic_allocation();
+    test_multiple_allocations();
+    test_initial_refcount();
+    test_clone_increments_refcount();
+    test_drop_decrements_refcount();
+    test_full_deallocation();
+    test_memory_reuse();
+    test_cons_refcounting();
+    test_nested_cons_deallocation();
+    test_list_deallocation();
+    test_lambda_refcounting();
+    test_symbol_refcounting();
+    test_null_ref_handling();
+    test_ref_new_from_existing();
+    test_shared_children();
+    test_set_cons_refcounting();
+    test_arena_exhaustion();
+    test_refcount_overflow_protection();
+    test_double_free_protection();
+    test_complex_tree_structure();
+    test_string_list_refcounting();
+    test_circular_references_prevention();
+    test_ref_clone_semantics();
+    test_list_len();
+    test_reverse_list_refcounting();
+    test_environment_refcounting();
 }

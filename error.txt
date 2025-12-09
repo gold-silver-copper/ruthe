@@ -1,132 +1,529 @@
-   Compiling ruthe v0.1.0 (/Users/kisaczka/Desktop/code/ruthe)
-error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
-   --> src/lib.rs:258:38
+warning: unused variable: `arena`
+   --> src/lib.rs:688:21
     |
-256 |             match self.get(list) {
-    |                   ---- immutable borrow occurs here
-257 |                 Some(Value::Cons(car, cdr)) => {
-258 |                     let new_result = self.cons(*car, result);
-    |                                      ^^^^^^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
-...
-261 |                     list = *cdr;
-    |                            ---- immutable borrow later used here
+688 | fn builtin_list<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+    |                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_arena`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
-error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
-   --> src/lib.rs:259:21
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:128:16
     |
-256 |             match self.get(list) {
-    |                   ---- immutable borrow occurs here
-...
-259 |                     self.decref(result);
-    |                     ^^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
-260 |                     result = new_result;
-261 |                     list = *cdr;
-    |                            ---- immutable borrow later used here
+128 |     pub fn nil(&self) -> Ref {
+    |                ^^^^^     ^^^ the same lifetime is hidden here
+    |                |
+    |                the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+128 |     pub fn nil(&self) -> Ref<'_> {
+    |                             ++++
 
-error[E0499]: cannot borrow `*arena` as mutable more than once at a time
-   --> src/lib.rs:308:26
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:132:19
     |
-308 |     let env = arena.cons(arena.nil(), arena.nil());
-    |               ----- ---- ^^^^^ second mutable borrow occurs here
-    |               |     |
-    |               |     first borrow later used by call
-    |               first mutable borrow occurs here
+132 |     pub fn number(&self, n: i64) -> Ref {
+    |                   ^^^^^             ^^^ the same lifetime is hidden here
+    |                   |
+    |                   the lifetime is elided here
     |
-help: try adding a local storing this argument...
-   --> src/lib.rs:308:26
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
     |
-308 |     let env = arena.cons(arena.nil(), arena.nil());
-    |                          ^^^^^^^^^^^
-help: ...and then using that local as the argument to this call
-   --> src/lib.rs:308:15
-    |
-308 |     let env = arena.cons(arena.nil(), arena.nil());
-    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+132 |     pub fn number(&self, n: i64) -> Ref<'_> {
+    |                                        ++++
 
-error[E0499]: cannot borrow `*arena` as mutable more than once at a time
-   --> src/lib.rs:308:39
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:136:21
     |
-308 |     let env = arena.cons(arena.nil(), arena.nil());
-    |               ----- ----              ^^^^^ second mutable borrow occurs here
-    |               |     |
-    |               |     first borrow later used by call
-    |               first mutable borrow occurs here
+136 |     pub fn bool_val(&self, b: bool) -> Ref {
+    |                     ^^^^^              ^^^ the same lifetime is hidden here
+    |                     |
+    |                     the lifetime is elided here
     |
-help: try adding a local storing this argument...
-   --> src/lib.rs:308:39
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
     |
-308 |     let env = arena.cons(arena.nil(), arena.nil());
-    |                                       ^^^^^^^^^^^
-help: ...and then using that local as the argument to this call
-   --> src/lib.rs:308:15
-    |
-308 |     let env = arena.cons(arena.nil(), arena.nil());
-    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+136 |     pub fn bool_val(&self, b: bool) -> Ref<'_> {
+    |                                           ++++
 
-error[E0499]: cannot borrow `*arena` as mutable more than once at a time
-   --> src/lib.rs:314:16
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:140:21
     |
-314 |     arena.cons(arena.nil(), parent)
-    |     ----- ---- ^^^^^ second mutable borrow occurs here
-    |     |     |
-    |     |     first borrow later used by call
-    |     first mutable borrow occurs here
+140 |     pub fn char_val(&self, c: char) -> Ref {
+    |                     ^^^^^              ^^^ the same lifetime is hidden here
+    |                     |
+    |                     the lifetime is elided here
     |
-help: try adding a local storing this argument...
-   --> src/lib.rs:314:16
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
     |
-314 |     arena.cons(arena.nil(), parent)
-    |                ^^^^^^^^^^^
-help: ...and then using that local as the argument to this call
-   --> src/lib.rs:314:5
-    |
-314 |     arena.cons(arena.nil(), parent)
-    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+140 |     pub fn char_val(&self, c: char) -> Ref<'_> {
+    |                                           ++++
 
-error[E0499]: cannot borrow `*arena` as mutable more than once at a time
-   --> src/lib.rs:842:53
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:144:17
     |
-842 |                         let list = arena.cons(expr, arena.nil());
-    |                                    ----- ----       ^^^^^ second mutable borrow occurs here
-    |                                    |     |
-    |                                    |     first borrow later used by call
-    |                                    first mutable borrow occurs here
+144 |     pub fn cons(&self, car: &Ref, cdr: &Ref) -> Ref {
+    |                 ^^^^^                           ^^^ the same lifetime is hidden here
+    |                 |
+    |                 the lifetime is elided here
     |
-help: try adding a local storing this argument...
-   --> src/lib.rs:842:53
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
     |
-842 |                         let list = arena.cons(expr, arena.nil());
-    |                                                     ^^^^^^^^^^^
-help: ...and then using that local as the argument to this call
-   --> src/lib.rs:842:36
+144 |     pub fn cons(&self, car: &Ref, cdr: &Ref) -> Ref<'_> {
+    |                                                    ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:150:19
     |
-842 |                         let list = arena.cons(expr, arena.nil());
-    |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+150 |     pub fn symbol(&self, s: &Ref) -> Ref {
+    |                   ^^^^^              ^^^ the same lifetime is hidden here
+    |                   |
+    |                   the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+150 |     pub fn symbol(&self, s: &Ref) -> Ref<'_> {
+    |                                         ++++
 
-warning: unused variable: `env`
-    --> src/lib.rs:1060:5
-     |
-1060 |     env: ArenaRef,
-     |     ^^^ help: if this is intentional, prefix it with an underscore: `_env`
-     |
-     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:155:19
+    |
+155 |     pub fn lambda(&self, params: &Ref, body: &Ref, env: &Ref) -> Ref {
+    |                   ^^^^^ the lifetime is elided here              ^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+155 |     pub fn lambda(&self, params: &Ref, body: &Ref, env: &Ref) -> Ref<'_> {
+    |                                                                     ++++
 
-warning: unused variable: `n`
-    --> src/lib.rs:1119:35
-     |
-1119 |         if let Some(Value::Number(n)) = arena.get(val) {
-     |                                   ^ help: if this is intentional, prefix it with an underscore: `_n`
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:162:20
+    |
+162 |     pub fn builtin(&self, idx: u8) -> Ref {
+    |                    ^^^^^              ^^^ the same lifetime is hidden here
+    |                    |
+    |                    the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+162 |     pub fn builtin(&self, idx: u8) -> Ref<'_> {
+    |                                          ++++
 
-warning: unused variable: `n`
-    --> src/lib.rs:1131:35
-     |
-1131 |         if let Some(Value::Number(n)) = arena.get(val) {
-     |                                   ^ help: if this is intentional, prefix it with an underscore: `_n`
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:241:24
+    |
+241 |     pub fn str_to_list(&self, s: &str) -> Ref {
+    |                        ^^^^^              ^^^ the same lifetime is hidden here
+    |                        |
+    |                        the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+241 |     pub fn str_to_list(&self, s: &str) -> Ref<'_> {
+    |                                              ++++
 
-Some errors have detailed explanations: E0499, E0502.
-For more information about an error, try `rustc --explain E0499`.
-warning: `ruthe` (lib) generated 3 warnings
-error: could not compile `ruthe` (lib) due to 6 previous errors; 3 warnings emitted
-warning: build failed, waiting for other jobs to finish...
-warning: `ruthe` (lib test) generated 3 warnings (3 duplicates)
-error: could not compile `ruthe` (lib test) due to 6 previous errors; 3 warnings emitted
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:307:21
+    |
+307 |     pub fn list_nth(&self, list: &Ref, n: usize) -> Option<Ref> {
+    |                     ^^^^^ the lifetime is elided here      ^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+307 |     pub fn list_nth(&self, list: &Ref, n: usize) -> Option<Ref<'_>> {
+    |                                                               ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:324:25
+    |
+324 |     pub fn reverse_list(&self, list: &Ref) -> Ref {
+    |                         ^^^^^                 ^^^ the same lifetime is hidden here
+    |                         |
+    |                         the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+324 |     pub fn reverse_list(&self, list: &Ref) -> Ref<'_> {
+    |                                                  ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:369:23
+    |
+369 | pub fn env_new(arena: &Arena) -> Ref {
+    |                       ^^^^^^     ^^^ the same lifetime is hidden here
+    |                       |
+    |                       the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+369 | pub fn env_new(arena: &Arena) -> Ref<'_> {
+    |                                     ++++
+
+warning: `ruthe` (lib) generated 13 warnings (run `cargo fix --lib -p ruthe` to apply 13 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.00s
+     Running `target/release/examples/bench`
+╔════════════════════════════════════════════════════════════╗
+║     COMPREHENSIVE LISP INTERPRETER BENCHMARK SUITE        ║
+║         (Arena-Based with Automatic RefCounting)           ║
+╚════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────┐
+│ 1. BASIC ARITHMETIC OPERATIONS                              │
+└─────────────────────────────────────────────────────────────┘
+
+Simple addition (+ 1 2):
+  Min:    833ns
+  Max:    13.83µs
+  Median: 958ns
+  Mean:   957ns
+  StdDev: 209ns
+
+Multi-operand add (+ 1 2 3 4 5):
+  Min:    1.29µs
+  Max:    17.71µs
+  Median: 1.38µs
+  Mean:   1.40µs
+  StdDev: 235ns
+
+Large numbers (* 999999 999999):
+  Min:    1.17µs
+  Max:    20.96µs
+  Median: 1.25µs
+  Mean:   1.27µs
+  StdDev: 294ns
+
+Subtraction (- 1000 999):
+  Min:    1.00µs
+  Max:    21.29µs
+  Median: 1.12µs
+  Mean:   1.12µs
+  StdDev: 200ns
+
+Division (/ 1000000 7):
+  Min:    1.04µs
+  Max:    15.50µs
+  Median: 1.12µs
+  Mean:   1.13µs
+  StdDev: 250ns
+
+Nested arithmetic:
+  Min:    3.58µs
+  Max:    25.08µs
+  Median: 3.71µs
+  Mean:   3.73µs
+  StdDev: 418ns
+
+┌─────────────────────────────────────────────────────────────┐
+│ 2. COMPARISON & BOOLEAN OPERATIONS                          │
+└─────────────────────────────────────────────────────────────┘
+
+Equality (= 5 5):
+  Min:    792ns
+  Max:    14.75µs
+  Median: 916ns
+  Mean:   908ns
+  StdDev: 152ns
+
+Inequality (= 5 6):
+  Min:    792ns
+  Max:    15.62µs
+  Median: 916ns
+  Mean:   907ns
+  StdDev: 148ns
+
+Less than (< 3 5):
+  Min:    791ns
+  Max:    12.96µs
+  Median: 875ns
+  Mean:   895ns
+  StdDev: 165ns
+
+Greater than (> 10 5):
+  Min:    792ns
+  Max:    21.79µs
+  Median: 917ns
+  Mean:   916ns
+  StdDev: 146ns
+
+Complex comparison:
+  Min:    2.46µs
+  Max:    22.33µs
+  Median: 2.58µs
+  Mean:   2.59µs
+  StdDev: 353ns
+
+┌─────────────────────────────────────────────────────────────┐
+│ 3. LIST OPERATIONS                                          │
+└─────────────────────────────────────────────────────────────┘
+
+car '(1 2 3):
+  Min:    1.38µs
+  Max:    16.96µs
+  Median: 1.50µs
+  Mean:   1.50µs
+  StdDev: 211ns
+
+cdr '(1 2 3):
+  Min:    1.38µs
+  Max:    22.42µs
+  Median: 1.46µs
+  Mean:   1.48µs
+  StdDev: 248ns
+
+cons 1 '(2 3):
+  Min:    1.46µs
+  Max:    15.12µs
+  Median: 1.54µs
+  Mean:   1.61µs
+  StdDev: 520ns
+
+list 1 2 3 4 5:
+  Min:    1.33µs
+  Max:    17.88µs
+  Median: 1.42µs
+  Mean:   1.47µs
+  StdDev: 594ns
+
+length '(1 2 3 4 5):
+  Min:    1.67µs
+  Max:    14.04µs
+  Median: 1.79µs
+  Mean:   1.83µs
+  StdDev: 446ns
+
+reverse '(1 2 3 4 5):
+  Min:    1.75µs
+  Max:    17.29µs
+  Median: 1.88µs
+  Mean:   1.90µs
+  StdDev: 426ns
+
+append two lists:
+  Min:    2.08µs
+  Max:    15.12µs
+  Median: 2.21µs
+  Mean:   2.30µs
+  StdDev: 710ns
+
+null? nil:
+  Min:    958ns
+  Max:    14.79µs
+  Median: 1.08µs
+  Mean:   1.11µs
+  StdDev: 499ns
+
+┌─────────────────────────────────────────────────────────────┐
+│ 4. CONDITIONAL EXPRESSIONS                                  │
+└─────────────────────────────────────────────────────────────┘
+
+if #t 1 2:
+  Min:    625ns
+  Max:    12.83µs
+  Median: 708ns
+  Mean:   731ns
+  StdDev: 377ns
+
+if #f 1 2:
+  Min:    625ns
+  Max:    18.46µs
+  Median: 708ns
+  Mean:   734ns
+  StdDev: 398ns
+
+if with computation:
+  Min:    2.71µs
+  Max:    21.04µs
+  Median: 2.83µs
+  Mean:   2.96µs
+  StdDev: 811ns
+
+nested if:
+  Min:    1.25µs
+  Max:    20.25µs
+  Median: 1.33µs
+  Mean:   1.39µs
+  StdDev: 567ns
+
+┌─────────────────────────────────────────────────────────────┐
+│ 5. LAMBDA EXPRESSIONS & CLOSURES                            │
+└─────────────────────────────────────────────────────────────┘
+
+Simple lambda:
+  Min:    1.50µs
+  Max:    14.71µs
+  Median: 1.62µs
+  Mean:   1.69µs
+  StdDev: 583ns
+
+Lambda with computation:
+  Min:    2.46µs
+  Max:    20.00µs
+  Median: 2.58µs
+  Mean:   2.71µs
+  StdDev: 767ns
+
+Multi-arg lambda:
+  Min:    2.83µs
+  Max:    21.75µs
+  Median: 2.96µs
+  Mean:   3.08µs
+  StdDev: 778ns
+
+Zero-arg lambda:
+  Min:    1.08µs
+  Max:    13.54µs
+  Median: 1.21µs
+  Mean:   1.24µs
+  StdDev: 424ns
+
+Closure call:
+  Median: 4.08µs
+  Mean:   4.27µs
+
+┌─────────────────────────────────────────────────────────────┐
+│ 6. RECURSIVE FUNCTIONS                                      │
+└─────────────────────────────────────────────────────────────┘
+
+--- Fibonacci (Tree Recursion) ---
+  fib(5) = 5 (26.38µs)
+  fib(10) = 55 (310.88µs)
+  fib(15) = 610 (3.45ms)
+  fib(20) = 6765 (38.94ms)
+
+--- Factorial (Tail Recursion) ---
+  factorial(5) = 120 (15.46µs)
+  factorial(10) = 3628800 (26.54µs)
+  factorial(15) = 1307674368000 (37.62µs)
+  factorial(20) = 2432902008176640000 (52.96µs)
+
+--- Ackermann Function (Complex Recursion) ---
+  ack(1, 2) = 4 (14.92µs)
+  ack(2, 2) = 7 (64.58µs)
+  ack(2, 3) = 9 (105.62µs)
+  ack(3, 2) = 29 (1.34ms)
+
+sum-list '(1 2 3 4 5):
+  Median: 16.29µs
+  Mean:   16.56µs
+
+┌─────────────────────────────────────────────────────────────┐
+│ 7. TAIL CALL OPTIMIZATION                                   │
+└─────────────────────────────────────────────────────────────┘
+
+--- Countdown (Tail Recursion) ---
+  countdown(1000) ERROR: Error
+  countdown(10000) ERROR: Error
+  countdown(100000) ERROR: Error
+
+--- Sum with Tail Recursion ---
+  sum-tail(100) = 5050 (253.71µs)
+  sum-tail(1000) ERROR: Error
+  sum-tail(10000) ERROR: Error
+
+┌─────────────────────────────────────────────────────────────┐
+│ 8. HIGHER-ORDER FUNCTIONS                                   │
+└─────────────────────────────────────────────────────────────┘
+
+map square '(1 2 3 4 5):
+  Median: 23.25µs
+  Mean:   23.32µs
+
+filter positive?:
+  Median: 28.58µs
+  Mean:   28.68µs
+
+composed function:
+  Median: 3.21µs
+  Mean:   3.33µs
+
+┌─────────────────────────────────────────────────────────────┐
+│ 9. COMPLEX DATA STRUCTURES                                  │
+└─────────────────────────────────────────────────────────────┘
+
+--- Building Large Lists ---
+  build-list(10) = 10 (34.21µs)
+  build-list(50) = 50 (149.79µs)
+  build-list(100) = 100 (297.33µs)
+  build-list(500) = 500 (1.57ms)
+
+┌─────────────────────────────────────────────────────────────┐
+│ 10. MUTUAL RECURSION                                        │
+└─────────────────────────────────────────────────────────────┘
+
+--- Even/Odd Test ---
+  is-even(10) = #t (22.88µs)
+  is-even(100) = #t (192.67µs)
+  is-even(1000) = #t (2.23ms)
+
+┌─────────────────────────────────────────────────────────────┐
+│ 11. EXPRESSION COMPLEXITY                                   │
+└─────────────────────────────────────────────────────────────┘
+
+deeply nested expr:
+  Min:    4.17µs
+  Max:    23.79µs
+  Median: 4.29µs
+  Mean:   4.32µs
+  StdDev: 345ns
+
+wide expr:
+  Min:    2.04µs
+  Max:    18.75µs
+  Median: 2.17µs
+  Mean:   2.17µs
+  StdDev: 219ns
+
+mixed nesting:
+  Min:    3.42µs
+  Max:    23.25µs
+  Median: 3.54µs
+  Mean:   3.54µs
+  StdDev: 213ns
+
+┌─────────────────────────────────────────────────────────────┐
+│ 12. PERFORMANCE SCALING ANALYSIS                            │
+└─────────────────────────────────────────────────────────────┘
+
+--- Fibonacci Scaling (O(φ^n)) ---
+Input      | Time            | Growth    
+----------------------------------------
+fib( 5)    | 25.29µs         | - (result: 5)
+fib(10)    | 290.17µs        | 11.47x (result: 55)
+fib(15)    | 3.27ms          | 11.27x (result: 610)
+fib(20)    | 37.02ms         | 11.32x (result: 6765)
+fib(23)    | 157.32ms        | 4.25x (result: 28657)
+
+--- Tail Recursion Scaling (O(n)) ---
+Input           | Time            | Growth    
+--------------------------------------------------
+countdown(1000) ERROR: #<null>
+countdown(10000) ERROR: #<null>
+countdown(50000) ERROR: #<null>
+countdown(100000) ERROR: #<null>
+
+
+╔════════════════════════════════════════════════════════════╗
+║                  BENCHMARK COMPLETE                        ║
+╚════════════════════════════════════════════════════════════╝
+
+Key Observations:
+  • Arena allocation enables efficient memory management
+  • Tail call optimization enables deep recursion
+  • Higher-order functions work efficiently with define
+  • AUTOMATIC reference counting - no manual incref/decref!
+  • RAII-based memory management prevents leaks
+  • Closure creation is efficient
+  • Expression evaluation scales predictably
+  • Define makes code much cleaner than self-application

@@ -1,96 +1,153 @@
-   Compiling ruthe v0.1.0 (/Users/kisaczka/Desktop/code/ruthe)
-warning: method `mark_all_envs` is never used
-   --> src/lib.rs:464:8
-    |
-387 | impl<const N: usize> Interpreter<N> {
-    | ----------------------------------- method in this implementation
-...
-464 |     fn mark_all_envs(&self) {
-    |        ^^^^^^^^^^^^^
-    |
-    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+warning: unused variable: `car`
+  --> examples/bench.rs:33:26
+   |
+33 |         Some(Value::Cons(car, cdr)) => {
+   |                          ^^^ help: if this is intentional, prefix it with an underscore: `_car`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
-warning: `ruthe` (lib test) generated 1 warning (1 duplicate)
-warning: `ruthe` (lib) generated 1 warning
-    Finished `release` profile [optimized] target(s) in 0.80s
+warning: unused variable: `cdr`
+  --> examples/bench.rs:33:31
+   |
+33 |         Some(Value::Cons(car, cdr)) => {
+   |                               ^^^ help: if this is intentional, prefix it with an underscore: `_cdr`
+
+warning: `ruthe` (example "bench") generated 2 warnings (run `cargo fix --example "bench" -p ruthe` to apply 2 suggestions)
+warning: unused variable: `car`
+  --> tests/test2.rs:53:26
+   |
+53 |         Some(Value::Cons(car, cdr)) => {
+   |                          ^^^ help: if this is intentional, prefix it with an underscore: `_car`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `cdr`
+  --> tests/test2.rs:53:31
+   |
+53 |         Some(Value::Cons(car, cdr)) => {
+   |                               ^^^ help: if this is intentional, prefix it with an underscore: `_cdr`
+
+warning: `ruthe` (test "test2") generated 2 warnings (run `cargo fix --test "test2" -p ruthe` to apply 2 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.00s
      Running unittests src/lib.rs (target/release/deps/ruthe-6a61844809290a22)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/tests.rs (target/release/deps/tests-c2e09e891a675fcc)
+     Running tests/test2.rs (target/release/deps/test2-00fda4cb0b873a75)
 
-running 50 tests
+running 47 tests
 test test_addition ... ok
-test test_append ... ok
+test test_append ... FAILED
+test test_cdr ... FAILED
+test test_define_and_use ... ok
+test test_car_cdr_errors ... ok
 test test_booleans ... ok
 test test_car ... ok
-test test_cdr ... ok
-test test_closure ... ok
-test test_comments ... ok
+test test_define_basic ... ok
 test test_cons ... ok
-test test_cons_predicate ... ok
-test test_define_expression ... ok
-test test_define_list ... ok
-test test_define_number ... ok
+test test_division_by_zero ... ok
 test test_division ... ok
-test test_empty_list ... ok
-test test_equality ... ok
+test test_empty_list ... FAILED
 test test_factorial ... ok
-test test_filter ... ok
-test test_greater_than ... ok
+test test_equality ... ok
+test test_factorial_with_define ... ok
+test test_filter_function ... ok
+test test_higher_order_function ... ok
+test test_fibonacci ... ok
+test test_if_nested ... ok
 test test_if_false ... ok
+test test_greater_than ... ok
 test test_if_nil_is_false ... ok
-test test_fibonacci ... FAILED
-test test_if_nonzero_is_true ... ok
+test test_if_non_boolean_is_true ... ok
+test test_lambda_basic ... ok
 test test_if_true ... ok
-test test_invalid_function_call ... ok
-test test_lambda_application ... ok
-test test_lambda_creation ... ok
-test test_lambda_multiple_params ... ok
-test test_lambda_parameter_shadowing ... ok
-test test_lambda_with_define ... ok
+test test_lambda_closure ... ok
+test test_lambda_no_args ... ok
+test test_lambda_nested ... ok
 test test_length ... ok
+test test_map_function ... ok
 test test_less_than ... ok
-test test_list_creation ... ok
-test test_list_sum ... ok
-test test_map ... ok
+test test_list ... FAILED
+test test_nil ... FAILED
 test test_multiplication ... ok
-test test_negative_numbers ... ok
+test test_parse_comments ... ok
 test test_nested_arithmetic ... ok
-test test_nested_if ... ok
-test test_nested_lambda ... ok
-test test_nested_lists ... ok
 test test_null_predicate ... ok
+test test_numbers ... ok
+test test_parse_whitespace ... ok
+test test_reverse ... FAILED
+test test_single_element_list ... FAILED
 test test_quote ... ok
-test test_reverse ... ok
 test test_subtraction ... ok
-test test_symbol_names ... ok
-test test_type_errors ... ok
+test test_tail_recursive_factorial ... ok
 test test_unbound_symbol ... ok
-test test_wrong_argument_count ... ok
-test test_tail_recursion ... FAILED
-test test_zero_operations ... ok
+test test_zero_arithmetic ... ok
+test test_tail_recursive_sum ... ok
 
 failures:
 
----- test_fibonacci stdout ----
+---- test_append stdout ----
 
-thread 'test_fibonacci' (68709214) panicked at tests/tests.rs:460:57:
-called `Result::unwrap()` on an `Err` value: "Unbound symbol"
+thread 'test_append' (71367810) panicked at tests/test2.rs:273:5:
+assertion `left == right` failed
+  left: Ok("")
+ right: Ok("nil")
+
+---- test_cdr stdout ----
+
+thread 'test_cdr' (71367814) panicked at tests/test2.rs:239:5:
+assertion `left == right` failed
+  left: Ok("")
+ right: Ok("nil")
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
----- test_tail_recursion stdout ----
+---- test_empty_list stdout ----
 
-thread 'test_tail_recursion' (68709243) panicked at tests/tests.rs:482:58:
-called `Result::unwrap()` on an `Err` value: "Unbound symbol"
+thread 'test_empty_list' (71367820) panicked at tests/test2.rs:570:5:
+assertion `left == right` failed
+  left: Ok("")
+ right: Ok("nil")
+
+---- test_list stdout ----
+
+thread 'test_list' (71367839) panicked at tests/test2.rs:212:5:
+assertion `left == right` failed
+  left: Ok("")
+ right: Ok("nil")
+
+---- test_nil stdout ----
+
+thread 'test_nil' (71367843) panicked at tests/test2.rs:120:5:
+assertion `left == right` failed
+  left: Ok("")
+ right: Ok("nil")
+
+---- test_reverse stdout ----
+
+thread 'test_reverse' (71367849) panicked at tests/test2.rs:286:5:
+assertion `left == right` failed
+  left: Ok("")
+ right: Ok("nil")
+
+---- test_single_element_list stdout ----
+
+thread 'test_single_element_list' (71367850) panicked at tests/test2.rs:578:5:
+assertion `left == right` failed
+  left: Ok("")
+ right: Ok("nil")
 
 
 failures:
-    test_fibonacci
-    test_tail_recursion
+    test_append
+    test_cdr
+    test_empty_list
+    test_list
+    test_nil
+    test_reverse
+    test_single_element_list
 
-test result: FAILED. 48 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: FAILED. 40 passed; 7 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 
-error: test failed, to rerun pass `--test tests`
+error: test failed, to rerun pass `--test test2`

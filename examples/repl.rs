@@ -1,3 +1,6 @@
+/*
+
+
 //! Minimal REPL example for the Lisp interpreter
 //!
 //! Run with: cargo run --example repl --features=std
@@ -51,3 +54,6 @@ fn main() -> io::Result<()> {
     println!("Goodbye!");
     Ok(())
 }
+
+*/
+fn main() {}
