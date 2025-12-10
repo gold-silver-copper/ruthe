@@ -221,7 +221,7 @@ impl<const N: usize> Arena<N> {
 #[derive(Debug)]
 pub struct Ref<'arena, const N: usize> {
     arena: &'arena Arena<N>,
-    inner: ArenaRef,
+    pub inner: ArenaRef,
 }
 
 impl<'arena, const N: usize> Ref<'arena, N> {

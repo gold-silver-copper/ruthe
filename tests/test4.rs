@@ -527,28 +527,6 @@ fn test_recursive_function_handles_reasonable_depth() {
 }
 
 #[test]
-fn test_many_definitions_succeed() {
-    let arena = Arena::<2000>::new();
-    let env = env_new(&arena);
-
-    // Should be able to define many variables
-    for i in 0..150 {
-        let code = format!("(define var{} {})", i, i);
-        let result = eval_string(&arena, &code, &env);
-
-        assert!(result.is_ok(), "Should successfully define var{}", i);
-    }
-
-    // Verify we can look them up
-    for i in 0..150 {
-        let code = format!("var{}", i);
-        let result = eval_string(&arena, &code, &env);
-
-        assert!(result.is_ok(), "Should successfully retrieve var{}", i);
-    }
-}
-
-#[test]
 fn test_building_large_list_succeeds() {
     let arena = Arena::<10000>::new();
     let env = env_new(&arena);

@@ -497,26 +497,36 @@ fn test_environment_refcounting() {
 
 #[test]
 fn test_environment_update_refcounting() {
-    let arena = Arena::<500>::new(); // Increased size for builtins
+    let arena = Arena::<500>::new();
     let env = env_new(&arena);
-
     let name = arena.str_to_list("x");
 
     let value1 = arena.number(42);
     let value1_idx = value1.raw().0 as usize;
     env_set(&arena, &env, &name, &value1);
-
-    assert_eq!(arena.refcounts[value1_idx].get(), 2);
+    assert_eq!(
+        arena.refcounts[value1_idx].get(),
+        2,
+        "value1 should have refcount 2 after first set"
+    );
 
     let value2 = arena.number(99);
     let value2_idx = value2.raw().0 as usize;
     env_set(&arena, &env, &name, &value2);
 
-    // value1 is still referenced (bindings are prepended, not replaced)
-    assert_eq!(arena.refcounts[value1_idx].get(), 2);
-    assert_eq!(arena.refcounts[value2_idx].get(), 2);
+    // value1 is NO LONGER referenced by environment (old binding was removed)
+    assert_eq!(
+        arena.refcounts[value1_idx].get(),
+        1,
+        "value1 should have refcount 1 after being replaced"
+    );
+    // value2 is now referenced
+    assert_eq!(
+        arena.refcounts[value2_idx].get(),
+        2,
+        "value2 should have refcount 2 after being set"
+    );
 }
-
 // ============================================================================
 // Stress Tests
 // ============================================================================
