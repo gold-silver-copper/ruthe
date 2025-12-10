@@ -94,32 +94,70 @@ impl<const N: usize> Arena<N> {
             return;
         }
 
-        let idx = r.0 as usize;
-        let value = self.values[idx].get();
-        if matches!(value, Value::Free) {
-            return;
-        }
+        // Use iterative approach with explicit stack to avoid stack overflow
+        let mut stack = [ArenaRef::NULL; 128]; // Increased stack size for safety
+        let mut stack_len = 0;
 
-        let rc = self.refcounts[idx].get();
-        if rc > 1 {
-            self.refcounts[idx].set(rc - 1);
-        } else if rc == 1 {
-            self.values[idx].set(Value::Free);
-            self.refcounts[idx].set(0);
+        stack[0] = r;
+        stack_len = 1;
 
-            // Recursively decref children
-            match value {
-                Value::Cons(car, cdr) => {
-                    self.decref(car);
-                    self.decref(cdr);
+        while stack_len > 0 {
+            stack_len -= 1;
+            let current = stack[stack_len];
+
+            if current.is_null() {
+                continue;
+            }
+
+            let idx = current.0 as usize;
+            let value = self.values[idx].get();
+
+            if matches!(value, Value::Free) {
+                continue;
+            }
+
+            let rc = self.refcounts[idx].get();
+            if rc > 1 {
+                self.refcounts[idx].set(rc - 1);
+            } else if rc == 1 {
+                self.values[idx].set(Value::Free);
+                self.refcounts[idx].set(0);
+
+                // Push children onto stack instead of recursing
+                match value {
+                    Value::Cons(car, cdr) => {
+                        if stack_len + 2 <= stack.len() {
+                            stack[stack_len] = car;
+                            stack[stack_len + 1] = cdr;
+                            stack_len += 2;
+                        } else {
+                            // Stack full - fall back to recursion (rare case)
+                            self.decref(car);
+                            self.decref(cdr);
+                        }
+                    }
+                    Value::Symbol(s) => {
+                        if stack_len < stack.len() {
+                            stack[stack_len] = s;
+                            stack_len += 1;
+                        } else {
+                            self.decref(s);
+                        }
+                    }
+                    Value::Lambda(params, body, env) => {
+                        if stack_len + 3 <= stack.len() {
+                            stack[stack_len] = params;
+                            stack[stack_len + 1] = body;
+                            stack[stack_len + 2] = env;
+                            stack_len += 3;
+                        } else {
+                            self.decref(params);
+                            self.decref(body);
+                            self.decref(env);
+                        }
+                    }
+                    _ => {}
                 }
-                Value::Symbol(s) => self.decref(s),
-                Value::Lambda(params, body, env) => {
-                    self.decref(params);
-                    self.decref(body);
-                    self.decref(env);
-                }
-                _ => {}
             }
         }
     }
