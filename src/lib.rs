@@ -1,7 +1,6 @@
 #![no_std]
 
 use core::cell::Cell;
-use core::ops::Deref;
 
 // ============================================================================
 // Arena Allocator with AUTOMATIC Reference Counting
@@ -143,21 +142,24 @@ impl<const N: usize> Arena<N> {
     }
 
     pub fn cons(&self, car: &Ref<N>, cdr: &Ref<N>) -> Ref<N> {
-        self.incref(**car);
-        self.incref(**cdr);
-        Ref::from_alloc(self, self.alloc(Value::Cons(**car, **cdr)))
+        self.incref(car.inner);
+        self.incref(cdr.inner);
+        Ref::from_alloc(self, self.alloc(Value::Cons(car.inner, cdr.inner)))
     }
 
     pub fn symbol(&self, s: &Ref<N>) -> Ref<N> {
-        self.incref(**s);
-        Ref::from_alloc(self, self.alloc(Value::Symbol(**s)))
+        self.incref(s.inner);
+        Ref::from_alloc(self, self.alloc(Value::Symbol(s.inner)))
     }
 
     pub fn lambda(&self, params: &Ref<N>, body: &Ref<N>, env: &Ref<N>) -> Ref<N> {
-        self.incref(**params);
-        self.incref(**body);
-        self.incref(**env);
-        Ref::from_alloc(self, self.alloc(Value::Lambda(**params, **body, **env)))
+        self.incref(params.inner);
+        self.incref(body.inner);
+        self.incref(env.inner);
+        Ref::from_alloc(
+            self,
+            self.alloc(Value::Lambda(params.inner, body.inner, env.inner)),
+        )
     }
 
     pub fn builtin(&self, idx: u8) -> Ref<N> {
@@ -165,10 +167,10 @@ impl<const N: usize> Arena<N> {
     }
 
     pub fn set_cons(&self, cons_ref: &Ref<N>, new_car: &Ref<N>, new_cdr: &Ref<N>) {
-        if let Some(Value::Cons(old_car, old_cdr)) = self.get(**cons_ref) {
-            self.incref(**new_car);
-            self.incref(**new_cdr);
-            self.values[cons_ref.inner.0 as usize].set(Value::Cons(**new_car, **new_cdr));
+        if let Some(Value::Cons(old_car, old_cdr)) = self.get(cons_ref.inner) {
+            self.incref(new_car.inner);
+            self.incref(new_cdr.inner);
+            self.values[cons_ref.inner.0 as usize].set(Value::Cons(new_car.inner, new_cdr.inner));
             self.decref(old_car);
             self.decref(old_cdr);
         }
@@ -179,25 +181,19 @@ impl<const N: usize> Arena<N> {
 // RAII Reference Wrapper - Automatic Reference Counting!
 // ============================================================================
 #[derive(Debug)]
-pub struct Ref<const N: usize> {
-    arena: *const Arena<N>,
+pub struct Ref<'arena, const N: usize> {
+    arena: &'arena Arena<N>,
     inner: ArenaRef,
 }
 
-impl<const N: usize> Ref<N> {
-    pub fn new(arena: &Arena<N>, r: ArenaRef) -> Self {
+impl<'arena, const N: usize> Ref<'arena, N> {
+    pub fn new(arena: &'arena Arena<N>, r: ArenaRef) -> Self {
         arena.incref(r);
-        Ref {
-            arena: arena as *const Arena<N>,
-            inner: r,
-        }
+        Ref { arena, inner: r }
     }
 
-    fn from_alloc(arena: &Arena<N>, r: ArenaRef) -> Self {
-        Ref {
-            arena: arena as *const Arena<N>,
-            inner: r,
-        }
+    fn from_alloc(arena: &'arena Arena<N>, r: ArenaRef) -> Self {
+        Ref { arena, inner: r }
     }
 
     pub fn raw(&self) -> ArenaRef {
@@ -205,21 +201,21 @@ impl<const N: usize> Ref<N> {
     }
 
     pub fn get(&self) -> Option<Value> {
-        unsafe { (*self.arena).get(self.inner) }
+        self.arena.get(self.inner)
     }
 
     pub fn is_null(&self) -> bool {
         self.inner.is_null()
     }
 
-    fn arena(&self) -> &Arena<N> {
-        unsafe { &*self.arena }
+    pub fn arena(&self) -> &'arena Arena<N> {
+        self.arena
     }
 }
 
-impl<const N: usize> Clone for Ref<N> {
+impl<'arena, const N: usize> Clone for Ref<'arena, N> {
     fn clone(&self) -> Self {
-        self.arena().incref(self.inner);
+        self.arena.incref(self.inner);
         Ref {
             arena: self.arena,
             inner: self.inner,
@@ -227,17 +223,9 @@ impl<const N: usize> Clone for Ref<N> {
     }
 }
 
-impl<const N: usize> Drop for Ref<N> {
+impl<'arena, const N: usize> Drop for Ref<'arena, N> {
     fn drop(&mut self) {
-        self.arena().decref(self.inner);
-    }
-}
-
-impl<const N: usize> Deref for Ref<N> {
-    type Target = ArenaRef;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+        self.arena.decref(self.inner);
     }
 }
 
@@ -260,7 +248,7 @@ impl<const N: usize> Arena<N> {
         let mut current = list.clone();
 
         loop {
-            match self.get(*current)? {
+            match self.get(current.inner)? {
                 Value::Char(ch) => {
                     let mut temp = [0u8; 4];
                     let s = ch.encode_utf8(&mut temp);
@@ -301,7 +289,7 @@ impl<const N: usize> Arena<N> {
         let mut count = 0;
         let mut current = list.clone();
         loop {
-            match self.get(*current) {
+            match self.get(current.inner) {
                 Some(Value::Cons(_, cdr)) => {
                     count += 1;
                     current = Ref::new(self, cdr);
@@ -316,7 +304,7 @@ impl<const N: usize> Arena<N> {
         let mut idx = 0;
         let mut current = list.clone();
         loop {
-            match self.get(*current) {
+            match self.get(current.inner) {
                 Some(Value::Cons(car, cdr)) => {
                     if idx == n {
                         return Some(Ref::new(self, car));
@@ -333,7 +321,7 @@ impl<const N: usize> Arena<N> {
         let mut result = self.nil();
         let mut current = list.clone();
         loop {
-            match self.get(*current) {
+            match self.get(current.inner) {
                 Some(Value::Cons(car, cdr)) => {
                     let car_ref = Ref::new(self, car);
                     result = self.cons(&car_ref, &result);
@@ -349,7 +337,7 @@ impl<const N: usize> Arena<N> {
         let mut c1 = s1.clone();
         let mut c2 = s2.clone();
         loop {
-            match (self.get(*c1), self.get(*c2)) {
+            match (self.get(c1.inner), self.get(c2.inner)) {
                 (Some(Value::Cons(car1, cdr1)), Some(Value::Cons(car2, cdr2))) => {
                     if let (Some(Value::Char(ch1)), Some(Value::Char(ch2))) =
                         (self.get(car1), self.get(car2))
@@ -374,7 +362,7 @@ impl<const N: usize> Arena<N> {
 // Environment Operations
 // ============================================================================
 
-pub fn env_new<const N: usize>(arena: &Arena<N>) -> Ref<N> {
+pub fn env_new<'arena, const N: usize>(arena: &'arena Arena<N>) -> Ref<'arena, N> {
     let nil1 = arena.nil();
     let nil2 = arena.nil();
     let env = arena.cons(&nil1, &nil2);
@@ -382,13 +370,21 @@ pub fn env_new<const N: usize>(arena: &Arena<N>) -> Ref<N> {
     env
 }
 
-pub fn env_with_parent<const N: usize>(arena: &Arena<N>, parent: &Ref<N>) -> Ref<N> {
+pub fn env_with_parent<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    parent: &Ref<'arena, N>,
+) -> Ref<'arena, N> {
     let nil = arena.nil();
     arena.cons(&nil, parent)
 }
 
-pub fn env_set<const N: usize>(arena: &Arena<N>, env: &Ref<N>, name: &Ref<N>, value: &Ref<N>) {
-    if let Some(Value::Cons(bindings, parent)) = arena.get(**env) {
+pub fn env_set<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    env: &Ref<'arena, N>,
+    name: &Ref<'arena, N>,
+    value: &Ref<'arena, N>,
+) {
+    if let Some(Value::Cons(bindings, parent)) = arena.get(env.inner) {
         let bindings_ref = Ref::new(arena, bindings);
         let parent_ref = Ref::new(arena, parent);
 
@@ -400,14 +396,18 @@ pub fn env_set<const N: usize>(arena: &Arena<N>, env: &Ref<N>, name: &Ref<N>, va
     }
 }
 
-pub fn env_get<const N: usize>(arena: &Arena<N>, env: &Ref<N>, name: &Ref<N>) -> Option<Ref<N>> {
+pub fn env_get<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    env: &Ref<'arena, N>,
+    name: &Ref<'arena, N>,
+) -> Option<Ref<'arena, N>> {
     let mut current_env = env.clone();
     loop {
-        match arena.get(*current_env) {
+        match arena.get(current_env.inner) {
             Some(Value::Cons(bindings, parent)) => {
                 let mut bindings_list = Ref::new(arena, bindings);
                 loop {
-                    match arena.get(*bindings_list) {
+                    match arena.get(bindings_list.inner) {
                         Some(Value::Cons(binding, rest)) => {
                             if let Some(Value::Cons(key, value)) = arena.get(binding) {
                                 if let Some(Value::Symbol(s)) = arena.get(key) {
@@ -453,11 +453,11 @@ const BUILTIN_LENGTH: u8 = 12;
 const BUILTIN_APPEND: u8 = 13;
 const BUILTIN_REVERSE: u8 = 14;
 
-fn call_builtin<const N: usize>(
-    arena: &Arena<N>,
+fn call_builtin<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
     idx: u8,
-    args: &Ref<N>,
-) -> Result<Ref<N>, Ref<N>> {
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     match idx {
         BUILTIN_ADD => builtin_add(arena, args),
         BUILTIN_SUB => builtin_sub(arena, args),
@@ -478,12 +478,15 @@ fn call_builtin<const N: usize>(
     }
 }
 
-fn builtin_add<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_add<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     let mut result = 0i64;
     let mut current = args.clone();
 
     loop {
-        match arena.get(*current) {
+        match arena.get(current.inner) {
             Some(Value::Cons(car, cdr)) => {
                 if let Some(Value::Number(n)) = arena.get(car) {
                     result = result
@@ -502,14 +505,17 @@ fn builtin_add<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>
     Ok(arena.number(result))
 }
 
-fn builtin_sub<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_sub<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     let len = arena.list_len(args);
     if len == 0 {
         return Err(arena.str_to_list("- requires args"));
     }
 
     let first = arena.list_nth(args, 0).unwrap();
-    let first_num = if let Some(Value::Number(n)) = arena.get(*first) {
+    let first_num = if let Some(Value::Number(n)) = arena.get(first.inner) {
         n
     } else {
         return Err(arena.str_to_list("- requires numbers"));
@@ -520,14 +526,14 @@ fn builtin_sub<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>
     }
 
     let mut result = first_num;
-    let mut current = if let Some(Value::Cons(_, cdr)) = arena.get(**args) {
+    let mut current = if let Some(Value::Cons(_, cdr)) = arena.get(args.inner) {
         Ref::new(arena, cdr)
     } else {
         return Err(arena.str_to_list("Invalid args"));
     };
 
     loop {
-        match arena.get(*current) {
+        match arena.get(current.inner) {
             Some(Value::Cons(car, cdr)) => {
                 if let Some(Value::Number(n)) = arena.get(car) {
                     result = result
@@ -546,12 +552,15 @@ fn builtin_sub<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>
     Ok(arena.number(result))
 }
 
-fn builtin_mul<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_mul<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     let mut result = 1i64;
     let mut current = args.clone();
 
     loop {
-        match arena.get(*current) {
+        match arena.get(current.inner) {
             Some(Value::Cons(car, cdr)) => {
                 if let Some(Value::Number(n)) = arena.get(car) {
                     result = result
@@ -570,27 +579,30 @@ fn builtin_mul<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>
     Ok(arena.number(result))
 }
 
-fn builtin_div<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_div<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     let len = arena.list_len(args);
     if len < 2 {
         return Err(arena.str_to_list("/ requires 2+ args"));
     }
 
     let first = arena.list_nth(args, 0).unwrap();
-    let mut result = if let Some(Value::Number(n)) = arena.get(*first) {
+    let mut result = if let Some(Value::Number(n)) = arena.get(first.inner) {
         n
     } else {
         return Err(arena.str_to_list("/ requires numbers"));
     };
 
-    let mut current = if let Some(Value::Cons(_, cdr)) = arena.get(**args) {
+    let mut current = if let Some(Value::Cons(_, cdr)) = arena.get(args.inner) {
         Ref::new(arena, cdr)
     } else {
         return Err(arena.str_to_list("Invalid args"));
     };
 
     loop {
-        match arena.get(*current) {
+        match arena.get(current.inner) {
             Some(Value::Cons(car, cdr)) => {
                 if let Some(Value::Number(n)) = arena.get(car) {
                     if n == 0 {
@@ -612,14 +624,17 @@ fn builtin_div<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>
     Ok(arena.number(result))
 }
 
-fn builtin_eq<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_eq<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     if arena.list_len(args) != 2 {
         return Err(arena.str_to_list("= requires 2 args"));
     }
     let a = arena.list_nth(args, 0).unwrap();
     let b = arena.list_nth(args, 1).unwrap();
 
-    let eq = match (arena.get(*a), arena.get(*b)) {
+    let eq = match (arena.get(a.inner), arena.get(b.inner)) {
         (Some(Value::Number(x)), Some(Value::Number(y))) => x == y,
         _ => return Err(arena.str_to_list("= requires numbers")),
     };
@@ -627,14 +642,17 @@ fn builtin_eq<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>,
     Ok(arena.bool_val(eq))
 }
 
-fn builtin_lt<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_lt<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     if arena.list_len(args) != 2 {
         return Err(arena.str_to_list("< requires 2 args"));
     }
     let a = arena.list_nth(args, 0).unwrap();
     let b = arena.list_nth(args, 1).unwrap();
 
-    let lt = match (arena.get(*a), arena.get(*b)) {
+    let lt = match (arena.get(a.inner), arena.get(b.inner)) {
         (Some(Value::Number(x)), Some(Value::Number(y))) => x < y,
         _ => return Err(arena.str_to_list("< requires numbers")),
     };
@@ -642,14 +660,17 @@ fn builtin_lt<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>,
     Ok(arena.bool_val(lt))
 }
 
-fn builtin_gt<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_gt<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     if arena.list_len(args) != 2 {
         return Err(arena.str_to_list("> requires 2 args"));
     }
     let a = arena.list_nth(args, 0).unwrap();
     let b = arena.list_nth(args, 1).unwrap();
 
-    let gt = match (arena.get(*a), arena.get(*b)) {
+    let gt = match (arena.get(a.inner), arena.get(b.inner)) {
         (Some(Value::Number(x)), Some(Value::Number(y))) => x > y,
         _ => return Err(arena.str_to_list("> requires numbers")),
     };
@@ -657,31 +678,40 @@ fn builtin_gt<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>,
     Ok(arena.bool_val(gt))
 }
 
-fn builtin_car<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_car<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     if arena.list_len(args) != 1 {
         return Err(arena.str_to_list("car requires 1 arg"));
     }
     let list = arena.list_nth(args, 0).unwrap();
-    if let Some(Value::Cons(car, _)) = arena.get(*list) {
+    if let Some(Value::Cons(car, _)) = arena.get(list.inner) {
         Ok(Ref::new(arena, car))
     } else {
         Err(arena.str_to_list("car requires cons"))
     }
 }
 
-fn builtin_cdr<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_cdr<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     if arena.list_len(args) != 1 {
         return Err(arena.str_to_list("cdr requires 1 arg"));
     }
     let list = arena.list_nth(args, 0).unwrap();
-    if let Some(Value::Cons(_, cdr)) = arena.get(*list) {
+    if let Some(Value::Cons(_, cdr)) = arena.get(list.inner) {
         Ok(Ref::new(arena, cdr))
     } else {
         Err(arena.str_to_list("cdr requires cons"))
     }
 }
 
-fn builtin_cons_fn<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_cons_fn<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     if arena.list_len(args) != 2 {
         return Err(arena.str_to_list("cons requires 2 args"));
     }
@@ -690,20 +720,29 @@ fn builtin_cons_fn<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Re
     Ok(arena.cons(&car, &cdr))
 }
 
-fn builtin_list<const N: usize>(_arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_list<'arena, const N: usize>(
+    _arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     Ok(args.clone())
 }
 
-fn builtin_null<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_null<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     if arena.list_len(args) != 1 {
         return Err(arena.str_to_list("null? requires 1 arg"));
     }
     let val = arena.list_nth(args, 0).unwrap();
-    let is_nil = matches!(arena.get(*val), Some(Value::Nil));
+    let is_nil = matches!(arena.get(val.inner), Some(Value::Nil));
     Ok(arena.bool_val(is_nil))
 }
 
-fn builtin_length<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_length<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     if arena.list_len(args) != 1 {
         return Err(arena.str_to_list("length requires 1 arg"));
     }
@@ -712,16 +751,19 @@ fn builtin_length<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref
     Ok(arena.number(len as i64))
 }
 
-fn builtin_append<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_append<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     let mut result = arena.nil();
     let mut current = args.clone();
 
     loop {
-        match arena.get(*current) {
+        match arena.get(current.inner) {
             Some(Value::Cons(list, rest)) => {
                 let mut list_cur = Ref::new(arena, list);
                 loop {
-                    match arena.get(*list_cur) {
+                    match arena.get(list_cur.inner) {
                         Some(Value::Cons(item, item_rest)) => {
                             let item_ref = Ref::new(arena, item);
                             result = arena.cons(&item_ref, &result);
@@ -743,7 +785,10 @@ fn builtin_append<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref
     Ok(arena.reverse_list(&result))
 }
 
-fn builtin_reverse<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+fn builtin_reverse<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     if arena.list_len(args) != 1 {
         return Err(arena.str_to_list("reverse requires 1 arg"));
     }
@@ -751,7 +796,7 @@ fn builtin_reverse<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Re
     Ok(arena.reverse_list(&list))
 }
 
-fn register_builtins<const N: usize>(arena: &Arena<N>, env: &Ref<N>) {
+fn register_builtins<'arena, const N: usize>(arena: &'arena Arena<N>, env: &Ref<'arena, N>) {
     let builtins = [
         ("+", BUILTIN_ADD),
         ("-", BUILTIN_SUB),
@@ -785,7 +830,10 @@ fn is_delimiter(ch: char) -> bool {
     ch.is_whitespace() || ch == '(' || ch == ')' || ch == '\'' || ch == ';'
 }
 
-pub fn tokenize<const N: usize>(arena: &Arena<N>, input: &str) -> Result<Ref<N>, Ref<N>> {
+pub fn tokenize<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    input: &str,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     let mut result = arena.nil();
     let mut chars = input.chars().peekable();
 
@@ -907,19 +955,22 @@ fn parse_i64(s: &str) -> Result<i64, ()> {
 // Parser
 // ============================================================================
 
-pub fn parse<const N: usize>(arena: &Arena<N>, tokens: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
+pub fn parse<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    tokens: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     let (expr, remaining) = parse_one(arena, tokens)?;
-    if !matches!(arena.get(*remaining), Some(Value::Nil)) {
+    if !matches!(arena.get(remaining.inner), Some(Value::Nil)) {
         return Err(arena.str_to_list("Extra tokens"));
     }
     Ok(expr)
 }
 
-fn parse_one<const N: usize>(
-    arena: &Arena<N>,
-    tokens: &Ref<N>,
-) -> Result<(Ref<N>, Ref<N>), Ref<N>> {
-    match arena.get(**tokens) {
+fn parse_one<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    tokens: &Ref<'arena, N>,
+) -> Result<(Ref<'arena, N>, Ref<'arena, N>), Ref<'arena, N>> {
+    match arena.get(tokens.inner) {
         Some(Value::Nil) => Err(arena.str_to_list("Unexpected EOF")),
         Some(Value::Cons(first, rest)) => {
             let first_ref = Ref::new(arena, first);
@@ -956,15 +1007,15 @@ fn parse_one<const N: usize>(
     }
 }
 
-fn parse_list<const N: usize>(
-    arena: &Arena<N>,
-    tokens: &Ref<N>,
-) -> Result<(Ref<N>, Ref<N>), Ref<N>> {
+fn parse_list<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    tokens: &Ref<'arena, N>,
+) -> Result<(Ref<'arena, N>, Ref<'arena, N>), Ref<'arena, N>> {
     let mut items = arena.nil();
     let mut current = tokens.clone();
 
     loop {
-        match arena.get(*current) {
+        match arena.get(current.inner) {
             Some(Value::Nil) => return Err(arena.str_to_list("Unmatched (")),
             Some(Value::Cons(tok, rest)) => {
                 if let Some(Value::Symbol(s)) = arena.get(tok) {
@@ -990,11 +1041,11 @@ fn parse_list<const N: usize>(
 // Evaluator with PROPER Tail Call Optimization
 // ============================================================================
 
-pub fn eval<const N: usize>(
-    arena: &Arena<N>,
-    expr: &Ref<N>,
-    env: &Ref<N>,
-) -> Result<Ref<N>, Ref<N>> {
+pub fn eval<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    expr: &Ref<'arena, N>,
+    env: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     let mut current_expr = expr.clone();
     let mut current_env = env.clone();
 
@@ -1009,17 +1060,17 @@ pub fn eval<const N: usize>(
     }
 }
 
-pub enum EvalResult<const N: usize> {
-    Done(Ref<N>),
-    TailCall(Ref<N>, Ref<N>),
+pub enum EvalResult<'arena, const N: usize> {
+    Done(Ref<'arena, N>),
+    TailCall(Ref<'arena, N>, Ref<'arena, N>),
 }
 
-fn eval_step<const N: usize>(
-    arena: &Arena<N>,
-    expr: &Ref<N>,
-    env: &Ref<N>,
-) -> Result<EvalResult<N>, Ref<N>> {
-    match arena.get(**expr) {
+fn eval_step<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    expr: &Ref<'arena, N>,
+    env: &Ref<'arena, N>,
+) -> Result<EvalResult<'arena, N>, Ref<'arena, N>> {
+    match arena.get(expr.inner) {
         Some(Value::Number(_))
         | Some(Value::Bool(_))
         | Some(Value::Builtin(_))
@@ -1076,11 +1127,11 @@ fn eval_step<const N: usize>(
     }
 }
 
-fn eval_if<const N: usize>(
-    arena: &Arena<N>,
-    expr: &Ref<N>,
-    env: &Ref<N>,
-) -> Result<EvalResult<N>, Ref<N>> {
+fn eval_if<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    expr: &Ref<'arena, N>,
+    env: &Ref<'arena, N>,
+) -> Result<EvalResult<'arena, N>, Ref<'arena, N>> {
     if arena.list_len(expr) != 4 {
         return Err(arena.str_to_list("if requires 3 args"));
     }
@@ -1088,7 +1139,7 @@ fn eval_if<const N: usize>(
     let cond_expr = arena.list_nth(expr, 1).unwrap();
     let cond = eval(arena, &cond_expr, env)?;
 
-    let is_true = match arena.get(*cond) {
+    let is_true = match arena.get(cond.inner) {
         Some(Value::Bool(b)) => b,
         Some(Value::Nil) => false,
         _ => true,
@@ -1103,11 +1154,11 @@ fn eval_if<const N: usize>(
     Ok(EvalResult::TailCall(branch, env.clone()))
 }
 
-fn eval_lambda<const N: usize>(
-    arena: &Arena<N>,
-    expr: &Ref<N>,
-    env: &Ref<N>,
-) -> Result<EvalResult<N>, Ref<N>> {
+fn eval_lambda<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    expr: &Ref<'arena, N>,
+    env: &Ref<'arena, N>,
+) -> Result<EvalResult<'arena, N>, Ref<'arena, N>> {
     if arena.list_len(expr) != 3 {
         return Err(arena.str_to_list("lambda requires 2 args"));
     }
@@ -1118,17 +1169,17 @@ fn eval_lambda<const N: usize>(
     Ok(EvalResult::Done(arena.lambda(&params, &body, env)))
 }
 
-fn eval_define<const N: usize>(
-    arena: &Arena<N>,
-    expr: &Ref<N>,
-    env: &Ref<N>,
-) -> Result<EvalResult<N>, Ref<N>> {
+fn eval_define<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    expr: &Ref<'arena, N>,
+    env: &Ref<'arena, N>,
+) -> Result<EvalResult<'arena, N>, Ref<'arena, N>> {
     if arena.list_len(expr) != 3 {
         return Err(arena.str_to_list("define requires 2 args"));
     }
 
     let name = arena.list_nth(expr, 1).unwrap();
-    let name_sym = if let Some(Value::Symbol(s)) = arena.get(*name) {
+    let name_sym = if let Some(Value::Symbol(s)) = arena.get(name.inner) {
         Ref::new(arena, s)
     } else {
         return Err(arena.str_to_list("define needs symbol"));
@@ -1141,20 +1192,20 @@ fn eval_define<const N: usize>(
     Ok(EvalResult::Done(value))
 }
 
-fn eval_args<const N: usize>(
-    arena: &Arena<N>,
-    expr: &Ref<N>,
-    env: &Ref<N>,
-) -> Result<Ref<N>, Ref<N>> {
+fn eval_args<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    expr: &Ref<'arena, N>,
+    env: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     let mut result = arena.nil();
-    let mut current = if let Some(Value::Cons(_, cdr)) = arena.get(**expr) {
+    let mut current = if let Some(Value::Cons(_, cdr)) = arena.get(expr.inner) {
         Ref::new(arena, cdr)
     } else {
         return Ok(result);
     };
 
     loop {
-        match arena.get(*current) {
+        match arena.get(current.inner) {
             Some(Value::Cons(car, cdr)) => {
                 let car_ref = Ref::new(arena, car);
                 let val = eval(arena, &car_ref, env)?;
@@ -1171,12 +1222,12 @@ fn eval_args<const N: usize>(
     Ok(arena.reverse_list(&result))
 }
 
-fn apply<const N: usize>(
-    arena: &Arena<N>,
-    func: &Ref<N>,
-    args: &Ref<N>,
-) -> Result<EvalResult<N>, Ref<N>> {
-    match arena.get(**func) {
+fn apply<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    func: &Ref<'arena, N>,
+    args: &Ref<'arena, N>,
+) -> Result<EvalResult<'arena, N>, Ref<'arena, N>> {
+    match arena.get(func.inner) {
         Some(Value::Builtin(idx)) => {
             let result = call_builtin(arena, idx, args)?;
             Ok(EvalResult::Done(result))
@@ -1189,7 +1240,7 @@ fn apply<const N: usize>(
             let mut a = args.clone();
 
             loop {
-                match (arena.get(*p), arena.get(*a)) {
+                match (arena.get(p.inner), arena.get(a.inner)) {
                     (Some(Value::Cons(p_car, p_cdr)), Some(Value::Cons(a_car, a_cdr))) => {
                         if let Some(Value::Symbol(name)) = arena.get(p_car) {
                             let name_ref = Ref::new(arena, name);
@@ -1217,11 +1268,11 @@ fn apply<const N: usize>(
 // High-level API
 // ============================================================================
 
-pub fn eval_string<const N: usize>(
-    arena: &Arena<N>,
+pub fn eval_string<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
     input: &str,
-    env: &Ref<N>,
-) -> Result<Ref<N>, Ref<N>> {
+    env: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, Ref<'arena, N>> {
     let tokens = tokenize(arena, input)?;
     let expr = parse(arena, &tokens)?;
     eval(arena, &expr, env)
@@ -1238,7 +1289,7 @@ pub fn run_example() -> Result<(), ()> {
     // Test: (+ 1 2 3)
     let result = eval_string(&arena, "(+ 1 2 3)", &env);
     if let Ok(val) = result {
-        if let Some(Value::Number(n)) = arena.get(*val) {
+        if let Some(Value::Number(n)) = arena.get(val.inner) {
             if n != 6 {
                 return Err(());
             }
@@ -1251,7 +1302,7 @@ pub fn run_example() -> Result<(), ()> {
     // Test: (* x 2)
     let result = eval_string(&arena, "(* x 2)", &env);
     if let Ok(val) = result {
-        if let Some(Value::Number(n)) = arena.get(*val) {
+        if let Some(Value::Number(n)) = arena.get(val.inner) {
             if n != 84 {
                 return Err(());
             }
@@ -1271,7 +1322,7 @@ pub fn run_example() -> Result<(), ()> {
     // Test: (factorial 5)
     let result = eval_string(&arena, "(factorial 5)", &env);
     if let Ok(val) = result {
-        if let Some(Value::Number(n)) = arena.get(*val) {
+        if let Some(Value::Number(n)) = arena.get(val.inner) {
             if n != 120 {
                 return Err(());
             }

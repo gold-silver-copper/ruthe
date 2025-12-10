@@ -11,6 +11,7 @@ use std::time::Instant;
 use std::vec::Vec;
 
 use ruthe::{Arena, Ref, Value, env_new, eval_string};
+
 fn format_duration(nanos: u128) -> String {
     if nanos < 1_000 {
         format!("{}ns", nanos)
@@ -23,8 +24,8 @@ fn format_duration(nanos: u128) -> String {
     }
 }
 
-fn format_value<const N: usize>(arena: &Arena<N>, val: &Ref<N>) -> String {
-    match arena.get(**val) {
+fn format_value<'arena, const N: usize>(arena: &'arena Arena<N>, val: &Ref<'arena, N>) -> String {
+    match arena.get(val.raw()) {
         Some(Value::Number(n)) => format!("{}", n),
         Some(Value::Bool(true)) => String::from("#t"),
         Some(Value::Bool(false)) => String::from("#f"),
@@ -35,7 +36,7 @@ fn format_value<const N: usize>(arena: &Arena<N>, val: &Ref<N>) -> String {
             let mut first = true;
 
             loop {
-                match arena.get(*current) {
+                match arena.get(current.raw()) {
                     Some(Value::Cons(car, cdr)) => {
                         if !first {
                             result.push(' ');
@@ -120,11 +121,11 @@ fn benchmark_expression(name: &str, expr: &str, iterations: usize) {
     println!();
 }
 
-fn benchmark_single<const N: usize>(
-    arena: &Arena<N>,
+fn benchmark_single<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
     name: &str,
     expr: &str,
-    env: &Ref<N>,
+    env: &Ref<'arena, N>,
 ) -> Result<u128, String> {
     let start = Instant::now();
     let result = eval_string(arena, expr, env).map_err(|e| {
@@ -804,6 +805,7 @@ fn main() {
     println!("  • Higher-order functions work efficiently with define");
     println!("  • AUTOMATIC reference counting - no manual incref/decref!");
     println!("  • RAII-based memory management prevents leaks");
+    println!("  • SAFE Rust - zero unsafe code!");
     println!("  • Closure creation is efficient");
     println!("  • Expression evaluation scales predictably");
     println!("  • Define makes code much cleaner than self-application");

@@ -45,7 +45,7 @@ fn test_basic_allocation() {
     let num = arena.number(42);
     assert!(count_free_slots(&arena) == ARENA_SIZE - 1);
 
-    if let Some(Value::Number(n)) = arena.get(*num) {
+    if let Some(Value::Number(n)) = arena.get(num.raw()) {
         assert!(n == 42);
     } else {
         panic!("Expected Number(42)");
@@ -61,13 +61,13 @@ fn test_multiple_allocations() {
 
     assert!(count_free_slots(&arena) == ARENA_SIZE - 3);
 
-    if let Some(Value::Number(n)) = arena.get(*n1) {
+    if let Some(Value::Number(n)) = arena.get(n1.raw()) {
         assert!(n == 1);
     }
-    if let Some(Value::Number(n)) = arena.get(*n2) {
+    if let Some(Value::Number(n)) = arena.get(n2.raw()) {
         assert!(n == 2);
     }
-    if let Some(Value::Number(n)) = arena.get(*n3) {
+    if let Some(Value::Number(n)) = arena.get(n3.raw()) {
         assert!(n == 3);
     }
 }
@@ -80,20 +80,20 @@ fn test_multiple_allocations() {
 fn test_initial_refcount() {
     let arena = Arena::<ARENA_SIZE>::new();
     let num = arena.number(100);
-    assert_refcount(&arena, *num, 1);
+    assert_refcount(&arena, num.raw(), 1);
 }
 
 #[test]
 fn test_clone_increments_refcount() {
     let arena = Arena::<ARENA_SIZE>::new();
     let num = arena.number(100);
-    assert_refcount(&arena, *num, 1);
+    assert_refcount(&arena, num.raw(), 1);
 
     let num2 = num.clone();
-    assert_refcount(&arena, *num, 2);
+    assert_refcount(&arena, num.raw(), 2);
 
     let num3 = num.clone();
-    assert_refcount(&arena, *num, 3);
+    assert_refcount(&arena, num.raw(), 3);
 
     assert!(num.raw().0 == num2.raw().0);
     assert!(num.raw().0 == num3.raw().0);
@@ -103,7 +103,7 @@ fn test_clone_increments_refcount() {
 fn test_drop_decrements_refcount() {
     let arena = Arena::<ARENA_SIZE>::new();
     let num = arena.number(100);
-    let r = *num;
+    let r = num.raw();
 
     assert_refcount(&arena, r, 1);
     {
@@ -136,7 +136,7 @@ fn test_memory_reuse() {
 
     let num2 = arena.number(200);
     if num2.raw().0 == r1.0 {
-        if let Some(Value::Number(n)) = arena.get(*num2) {
+        if let Some(Value::Number(n)) = arena.get(num2.raw()) {
             assert!(n == 200);
         }
     }
@@ -151,8 +151,8 @@ fn test_cons_refcounting() {
     let arena = Arena::<ARENA_SIZE>::new();
     let car = arena.number(1);
     let cdr = arena.number(2);
-    let car_ref = *car;
-    let cdr_ref = *cdr;
+    let car_ref = car.raw();
+    let cdr_ref = cdr.raw();
 
     assert_refcount(&arena, car_ref, 1);
     assert_refcount(&arena, cdr_ref, 1);
@@ -222,9 +222,9 @@ fn test_lambda_refcounting() {
     let body = arena.number(42);
     let env = arena.nil();
 
-    let params_ref = *params;
-    let body_ref = *body;
-    let env_ref = *env;
+    let params_ref = params.raw();
+    let body_ref = body.raw();
+    let env_ref = env.raw();
 
     assert_refcount(&arena, params_ref, 1);
     assert_refcount(&arena, body_ref, 1);
@@ -259,7 +259,7 @@ fn test_lambda_refcounting() {
 fn test_symbol_refcounting() {
     let arena = Arena::<ARENA_SIZE>::new();
     let str_list = arena.str_to_list("foo");
-    let str_ref = *str_list;
+    let str_ref = str_list.raw();
 
     assert_refcount(&arena, str_ref, 1);
 
@@ -293,7 +293,7 @@ fn test_null_ref_handling() {
 fn test_ref_new_from_existing() {
     let arena = Arena::<ARENA_SIZE>::new();
     let num = arena.number(100);
-    let raw = *num;
+    let raw = num.raw();
 
     assert_refcount(&arena, raw, 1);
 
@@ -311,7 +311,7 @@ fn test_ref_new_from_existing() {
 fn test_shared_children() {
     let arena = Arena::<ARENA_SIZE>::new();
     let shared = arena.number(42);
-    let shared_ref = *shared;
+    let shared_ref = shared.raw();
 
     assert_refcount(&arena, shared_ref, 1);
 
@@ -337,16 +337,16 @@ fn test_set_cons_refcounting() {
     let cdr1 = arena.number(2);
     let cons = arena.cons(&car1, &cdr1);
 
-    let car1_ref = *car1;
-    let cdr1_ref = *cdr1;
+    let car1_ref = car1.raw();
+    let cdr1_ref = cdr1.raw();
 
     assert_refcount(&arena, car1_ref, 2);
     assert_refcount(&arena, cdr1_ref, 2);
 
     let car2 = arena.number(3);
     let cdr2 = arena.number(4);
-    let car2_ref = *car2;
-    let cdr2_ref = *cdr2;
+    let car2_ref = car2.raw();
+    let cdr2_ref = cdr2.raw();
 
     arena.set_cons(&cons, &car2, &cdr2);
 
@@ -355,7 +355,7 @@ fn test_set_cons_refcounting() {
     assert_refcount(&arena, car2_ref, 2);
     assert_refcount(&arena, cdr2_ref, 2);
 
-    if let Some(Value::Cons(car, cdr)) = arena.get(*cons) {
+    if let Some(Value::Cons(car, cdr)) = arena.get(cons.raw()) {
         assert!(car.0 == car2_ref.0);
         assert!(cdr.0 == cdr2_ref.0);
     } else {
@@ -367,7 +367,7 @@ fn test_set_cons_refcounting() {
 fn test_refcount_overflow_protection() {
     let arena = Arena::<ARENA_SIZE>::new();
     let num = arena.number(100);
-    let raw = *num;
+    let raw = num.raw();
 
     arena.refcounts[raw.0 as usize].set(u32::MAX - 1);
 
@@ -382,7 +382,7 @@ fn test_refcount_overflow_protection() {
 fn test_double_free_protection() {
     let arena = Arena::<ARENA_SIZE>::new();
     let num = arena.number(100);
-    let raw = *num;
+    let raw = num.raw();
 
     drop(num);
     assert!(matches!(arena.get(raw), None));
@@ -441,7 +441,7 @@ fn test_string_list_refcounting() {
         assert!(count_free_slots(&arena) < initial_free - 5);
 
         let s2 = s.clone();
-        let raw = *s;
+        let raw = s.raw();
         assert_refcount(&arena, raw, 2);
 
         drop(s2);
@@ -464,8 +464,8 @@ fn test_circular_references_prevention() {
     arena.set_cons(&a, &a_val, &b);
     arena.set_cons(&b, &b_val, &a);
 
-    let a_ref = *a;
-    let b_ref = *b;
+    let a_ref = a.raw();
+    let b_ref = b.raw();
 
     drop(a);
     drop(b);
@@ -478,7 +478,7 @@ fn test_circular_references_prevention() {
 fn test_ref_clone_semantics() {
     let arena = Arena::<ARENA_SIZE>::new();
     let num = arena.number(42);
-    let raw = *num;
+    let raw = num.raw();
 
     assert_refcount(&arena, raw, 1);
 
@@ -529,9 +529,9 @@ fn test_reverse_list_refcounting() {
 
     assert!(count_free_slots(&arena) == initial_free - 4);
 
-    let one_ref = *one;
-    let two_ref = *two;
-    let three_ref = *three;
+    let one_ref = one.raw();
+    let two_ref = two.raw();
+    let three_ref = three.raw();
 
     assert_refcount(&arena, one_ref, 3);
     assert_refcount(&arena, two_ref, 3);
@@ -569,7 +569,7 @@ fn test_environment_refcounting() {
         assert!(retrieved.is_some());
 
         if let Some(val) = retrieved {
-            if let Some(Value::Number(n)) = arena.get(*val) {
+            if let Some(Value::Number(n)) = arena.get(val.raw()) {
                 assert!(n == 42);
             }
         }
@@ -586,28 +586,28 @@ fn test_basic_arithmetic() {
     let env = env_new(&arena);
 
     let result = eval_string(&arena, "(+ 1 2 3)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 6);
     } else {
         panic!("Expected 6");
     }
 
     let result = eval_string(&arena, "(* 2 3 4)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 24);
     } else {
         panic!("Expected 24");
     }
 
     let result = eval_string(&arena, "(- 10 3 2)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 5);
     } else {
         panic!("Expected 5");
     }
 
     let result = eval_string(&arena, "(/ 100 5 2)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 10);
     } else {
         panic!("Expected 10");
@@ -620,16 +620,16 @@ fn test_comparisons() {
     let env = env_new(&arena);
 
     let result = eval_string(&arena, "(= 5 5)", &env).unwrap();
-    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+    assert!(matches!(arena.get(result.raw()), Some(Value::Bool(true))));
 
     let result = eval_string(&arena, "(= 5 6)", &env).unwrap();
-    assert!(matches!(arena.get(*result), Some(Value::Bool(false))));
+    assert!(matches!(arena.get(result.raw()), Some(Value::Bool(false))));
 
     let result = eval_string(&arena, "(< 3 5)", &env).unwrap();
-    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+    assert!(matches!(arena.get(result.raw()), Some(Value::Bool(true))));
 
     let result = eval_string(&arena, "(> 10 5)", &env).unwrap();
-    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+    assert!(matches!(arena.get(result.raw()), Some(Value::Bool(true))));
 }
 
 #[test]
@@ -638,20 +638,20 @@ fn test_list_operations() {
     let env = env_new(&arena);
 
     let result = eval_string(&arena, "(car '(1 2 3))", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 1);
     }
 
     let result = eval_string(&arena, "(length '(1 2 3 4 5))", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 5);
     }
 
     let result = eval_string(&arena, "(null? nil)", &env).unwrap();
-    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+    assert!(matches!(arena.get(result.raw()), Some(Value::Bool(true))));
 
     let result = eval_string(&arena, "(null? '(1))", &env).unwrap();
-    assert!(matches!(arena.get(*result), Some(Value::Bool(false))));
+    assert!(matches!(arena.get(result.raw()), Some(Value::Bool(false))));
 }
 
 #[test]
@@ -660,17 +660,17 @@ fn test_conditionals() {
     let env = env_new(&arena);
 
     let result = eval_string(&arena, "(if #t 1 2)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 1);
     }
 
     let result = eval_string(&arena, "(if #f 1 2)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 2);
     }
 
     let result = eval_string(&arena, "(if (< 3 5) 10 20)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 10);
     }
 }
@@ -682,13 +682,13 @@ fn test_define_and_lookup() {
 
     eval_string(&arena, "(define x 42)", &env).unwrap();
     let result = eval_string(&arena, "x", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 42);
     }
 
     eval_string(&arena, "(define y (* x 2))", &env).unwrap();
     let result = eval_string(&arena, "y", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 84);
     }
 }
@@ -699,12 +699,12 @@ fn test_lambda_basic() {
     let env = env_new(&arena);
 
     let result = eval_string(&arena, "((lambda (x) (* x x)) 5)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 25);
     }
 
     let result = eval_string(&arena, "((lambda (x y) (+ x y)) 3 4)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 7);
     }
 }
@@ -723,13 +723,13 @@ fn test_closures() {
     eval_string(&arena, "(define add5 (make-adder 5))", &env).unwrap();
 
     let result = eval_string(&arena, "(add5 10)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 15);
     }
 
     eval_string(&arena, "(define add10 (make-adder 10))", &env).unwrap();
     let result = eval_string(&arena, "(add10 5)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 15);
     }
 }
@@ -757,7 +757,7 @@ fn test_simple_tail_recursion() {
     .unwrap();
 
     let result = eval_string(&arena, "(countdown 100 0)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 100);
     }
 }
@@ -781,7 +781,7 @@ fn test_deep_tail_recursion() {
     .unwrap();
 
     let result = eval_string(&arena, "(sum-tail 1000 0)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 500500); // sum from 1 to 1000
     }
 }
@@ -805,7 +805,7 @@ fn test_factorial_tail_recursive() {
     .unwrap();
 
     let result = eval_string(&arena, "(factorial 10 1)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 3628800);
     }
 }
@@ -870,7 +870,7 @@ fn test_very_deep_recursion() {
 
     // 50,000 iterations - should work with proper TCO
     let result = eval_string(&arena, "(deep-sum 50000 0)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 50000);
     }
 }
@@ -894,7 +894,7 @@ fn test_fibonacci_tree_recursion() {
     .unwrap();
 
     let result = eval_string(&arena, "(fib 15)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 610);
     }
 }
@@ -931,14 +931,14 @@ fn test_mutual_recursion() {
     .unwrap();
 
     let result = eval_string(&arena, "(is-even 100)", &env).unwrap();
-    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+    assert!(matches!(arena.get(result.raw()), Some(Value::Bool(true))));
 
     let result = eval_string(&arena, "(is-odd 99)", &env).unwrap();
-    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+    assert!(matches!(arena.get(result.raw()), Some(Value::Bool(true))));
 
     // Deep mutual recursion
     let result = eval_string(&arena, "(is-even 1000)", &env).unwrap();
-    assert!(matches!(arena.get(*result), Some(Value::Bool(true))));
+    assert!(matches!(arena.get(result.raw()), Some(Value::Bool(true))));
 }
 
 #[test]
@@ -962,12 +962,12 @@ fn test_ackermann_function() {
     .unwrap();
 
     let result = eval_string(&arena, "(ackermann 2 2)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 7);
     }
 
     let result = eval_string(&arena, "(ackermann 3 2)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 29);
     }
 }
@@ -994,22 +994,22 @@ fn test_higher_order_functions() {
 
     // Verify list contains 1, 4, 9, 16
     let first = arena.list_nth(&result, 0).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*first) {
+    if let Some(Value::Number(n)) = arena.get(first.raw()) {
         assert_eq!(n, 1);
     }
 
     let second = arena.list_nth(&result, 1).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*second) {
+    if let Some(Value::Number(n)) = arena.get(second.raw()) {
         assert_eq!(n, 4);
     }
 
     let third = arena.list_nth(&result, 2).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*third) {
+    if let Some(Value::Number(n)) = arena.get(third.raw()) {
         assert_eq!(n, 9);
     }
 
     let fourth = arena.list_nth(&result, 3).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*fourth) {
+    if let Some(Value::Number(n)) = arena.get(fourth.raw()) {
         assert_eq!(n, 16);
     }
 }
@@ -1044,12 +1044,12 @@ fn test_filter_function() {
     assert_eq!(arena.list_len(&result), 3);
 
     let first = arena.list_nth(&result, 0).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*first) {
+    if let Some(Value::Number(n)) = arena.get(first.raw()) {
         assert_eq!(n, 1);
     }
 
     let second = arena.list_nth(&result, 1).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*second) {
+    if let Some(Value::Number(n)) = arena.get(second.raw()) {
         assert_eq!(n, 2);
     }
 }
@@ -1075,7 +1075,7 @@ fn test_compose_function() {
     eval_string(&arena, "(define composed (compose add1 square))", &env).unwrap();
 
     let result = eval_string(&arena, "(composed 5)", &env).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 26); // square(5) + 1 = 25 + 1 = 26
     }
 }
@@ -1102,7 +1102,7 @@ fn test_list_building() {
     assert_eq!(arena.list_len(&result), 100);
 
     let first = arena.list_nth(&result, 0).unwrap();
-    if let Some(Value::Number(n)) = arena.get(*first) {
+    if let Some(Value::Number(n)) = arena.get(first.raw()) {
         assert_eq!(n, 1);
     }
 }
@@ -1114,7 +1114,7 @@ fn test_nested_lambdas() {
 
     let result = eval_string(&arena, "((lambda (x) ((lambda (y) (+ x y)) 10)) 5)", &env).unwrap();
 
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 15);
     }
 }
@@ -1168,10 +1168,6 @@ fn test_error_handling() {
     let result = eval_string(&arena, "undefined-var", &env);
     assert!(result.is_err());
 
-    // Wrong number of args
-    let result = eval_string(&arena, "(+ 1)", &env);
-    // This should actually succeed with just 1
-
     let result = eval_string(&arena, "(if #t)", &env);
     assert!(result.is_err());
 }
@@ -1183,7 +1179,296 @@ fn test_complex_expression() {
 
     let result = eval_string(&arena, "(+ (* 2 3) (- 10 5) (/ 20 4))", &env).unwrap();
 
-    if let Some(Value::Number(n)) = arena.get(*result) {
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
         assert_eq!(n, 16); // 6 + 5 + 5
+    }
+}
+
+// ============================================================================
+// Additional Stress Tests
+// ============================================================================
+
+#[test]
+fn test_massive_list_operations() {
+    let arena = Arena::<ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define range
+          (lambda (n acc)
+            (if (= n 0)
+                acc
+                (range (- n 1) (cons n acc)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    // Create a list of 500 elements
+    let result = eval_string(&arena, "(length (range 500 nil))", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
+        assert_eq!(n, 500);
+    }
+}
+
+#[test]
+fn test_nested_closure_chains() {
+    let arena = Arena::<ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define make-chain
+          (lambda (n)
+            (if (= n 0)
+                (lambda (x) x)
+                (lambda (x) ((make-chain (- n 1)) (+ x 1))))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    // Create chain of 50 closures
+    eval_string(&arena, "(define chain50 (make-chain 50))", &env).unwrap();
+    let result = eval_string(&arena, "(chain50 0)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
+        assert_eq!(n, 50);
+    }
+}
+
+#[test]
+fn test_repeated_environment_modifications() {
+    let arena = Arena::<ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Define and redefine many variables
+    for i in 0..100 {
+        let def_expr = format!("(define var{} {})", i, i * 2);
+        eval_string(&arena, &def_expr, &env).unwrap();
+    }
+
+    // Verify a few
+    let result = eval_string(&arena, "var0", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
+        assert_eq!(n, 0);
+    }
+
+    let result = eval_string(&arena, "var50", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
+        assert_eq!(n, 100);
+    }
+
+    let result = eval_string(&arena, "var99", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
+        assert_eq!(n, 198);
+    }
+}
+
+#[test]
+fn test_fold_operations() {
+    let arena = Arena::<ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define fold
+          (lambda (f acc lst)
+            (if (null? lst)
+                acc
+                (fold f (f acc (car lst)) (cdr lst)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    // Sum using fold
+    let result = eval_string(
+        &arena,
+        "(fold (lambda (a b) (+ a b)) 0 '(1 2 3 4 5 6 7 8 9 10))",
+        &env,
+    )
+    .unwrap();
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
+        assert_eq!(n, 55);
+    }
+
+    // Product using fold
+    let result = eval_string(&arena, "(fold (lambda (a b) (* a b)) 1 '(1 2 3 4 5))", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
+        assert_eq!(n, 120);
+    }
+}
+
+#[test]
+fn test_deeply_nested_data_structures() {
+    let arena = Arena::<ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define make-nested
+          (lambda (depth val)
+            (if (= depth 0)
+                val
+                (cons (make-nested (- depth 1) val) nil))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    eval_string(
+        &arena,
+        r#"
+        (define extract-nested
+          (lambda (depth lst)
+            (if (= depth 0)
+                lst
+                (extract-nested (- depth 1) (car lst)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    // Create deeply nested structure (100 levels)
+    eval_string(&arena, "(define nested (make-nested 100 42))", &env).unwrap();
+
+    // Extract the value
+    let result = eval_string(&arena, "(extract-nested 100 nested)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
+        assert_eq!(n, 42);
+    }
+}
+
+#[test]
+fn test_alternating_recursion_patterns() {
+    let arena = Arena::<ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define bounce
+          (lambda (n mode)
+            (if (= n 0)
+                mode
+                (if (= mode 0)
+                    (bounce (- n 1) 1)
+                    (bounce (- n 1) 0)))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    let result = eval_string(&arena, "(bounce 1000 0)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
+        assert_eq!(n, 0); // Even number of bounces
+    }
+
+    let result = eval_string(&arena, "(bounce 999 0)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
+        assert_eq!(n, 1); // Odd number of bounces
+    }
+}
+
+#[test]
+fn test_memory_pressure_with_large_computations() {
+    let arena = Arena::<ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        r#"
+        (define compute-sum
+          (lambda (n)
+            (if (= n 0)
+                0
+                (+ n (compute-sum (- n 1))))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    let initial_free = count_free_slots(&arena);
+
+    // This creates temporary values but should free them
+    let result = eval_string(&arena, "(compute-sum 100)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
+        assert_eq!(n, 5050);
+    }
+
+    drop(result);
+
+    // Most memory should be freed
+    let final_free = count_free_slots(&arena);
+    let leaked = initial_free - final_free;
+
+    // Allow some leakage for env bindings but not much
+    assert!(leaked < 50, "Too much memory leaked: {} slots", leaked);
+}
+
+#[test]
+fn test_currying_chains() {
+    let arena = Arena::<ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    eval_string(
+        &arena,
+        "(define curry3 (lambda (f) (lambda (a) (lambda (b) (lambda (c) (f a b c))))))",
+        &env,
+    )
+    .unwrap();
+
+    eval_string(&arena, "(define add3 (lambda (x y z) (+ x (+ y z))))", &env).unwrap();
+
+    eval_string(&arena, "(define curried-add3 (curry3 add3))", &env).unwrap();
+
+    let result = eval_string(&arena, "(((curried-add3 1) 2) 3)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
+        assert_eq!(n, 6);
+    }
+}
+
+#[test]
+fn test_y_combinator() {
+    let arena = Arena::<ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Y combinator for recursion without define
+    eval_string(
+        &arena,
+        r#"
+        (define Y
+          (lambda (f)
+            ((lambda (x) (f (lambda (y) ((x x) y))))
+             (lambda (x) (f (lambda (y) ((x x) y)))))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    eval_string(
+        &arena,
+        r#"
+        (define fac-gen
+          (lambda (f)
+            (lambda (n)
+              (if (= n 0)
+                  1
+                  (* n (f (- n 1)))))))
+    "#,
+        &env,
+    )
+    .unwrap();
+
+    eval_string(&arena, "(define factorial (Y fac-gen))", &env).unwrap();
+
+    let result = eval_string(&arena, "(factorial 6)", &env).unwrap();
+    if let Some(Value::Number(n)) = arena.get(result.raw()) {
+        assert_eq!(n, 720);
     }
 }
