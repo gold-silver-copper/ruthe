@@ -95,7 +95,7 @@ impl<const N: usize> Arena<N> {
         }
 
         // Use iterative approach with explicit stack to avoid stack overflow
-        let mut stack = [ArenaRef::NULL; 128]; // Increased stack size for safety
+        let mut stack = [ArenaRef::NULL; 128];
         let mut stack_len = 0;
 
         stack[0] = r;
@@ -426,11 +426,46 @@ pub fn env_set<'arena, const N: usize>(
         let bindings_ref = Ref::new(arena, bindings);
         let parent_ref = Ref::new(arena, parent);
 
+        // Check if variable already exists in current environment
+        // If it does, remove the old binding to prevent memory leak
+        let filtered_bindings = remove_binding(arena, &bindings_ref, name);
+
         let sym = arena.symbol(name);
         let new_binding = arena.cons(&sym, value);
-        let new_bindings = arena.cons(&new_binding, &bindings_ref);
+        let new_bindings = arena.cons(&new_binding, &filtered_bindings);
 
         arena.set_cons(env, &new_bindings, &parent_ref);
+    }
+}
+
+// Helper function to remove a binding from the binding list
+fn remove_binding<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    bindings: &Ref<'arena, N>,
+    name: &Ref<'arena, N>,
+) -> Ref<'arena, N> {
+    match arena.get(bindings.inner) {
+        Some(Value::Nil) => arena.nil(),
+        Some(Value::Cons(binding, rest)) => {
+            let rest_ref = Ref::new(arena, rest);
+
+            // Check if this binding matches the name we're looking for
+            if let Some(Value::Cons(key, _)) = arena.get(binding) {
+                if let Some(Value::Symbol(s)) = arena.get(key) {
+                    let key_sym = Ref::new(arena, s);
+                    if arena.str_eq(&key_sym, name) {
+                        // Found it! Skip this binding and continue with the rest
+                        return remove_binding(arena, &rest_ref, name);
+                    }
+                }
+            }
+
+            // Not a match, keep this binding
+            let binding_ref = Ref::new(arena, binding);
+            let filtered_rest = remove_binding(arena, &rest_ref, name);
+            arena.cons(&binding_ref, &filtered_rest)
+        }
+        _ => arena.nil(),
     }
 }
 
