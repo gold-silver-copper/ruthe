@@ -645,7 +645,268 @@ const BUILTIN_NULL: u8 = 11;
 const BUILTIN_LENGTH: u8 = 12;
 const BUILTIN_APPEND: u8 = 13;
 const BUILTIN_REVERSE: u8 = 14;
+// Wave 2 Builtins: Quality of Life Improvements
 
+const BUILTIN_LTE: u8 = 27; // <=
+const BUILTIN_GTE: u8 = 28; // >=
+const BUILTIN_MIN: u8 = 29;
+const BUILTIN_MAX: u8 = 30;
+const BUILTIN_MODULO: u8 = 31;
+const BUILTIN_QUOTIENT: u8 = 32;
+const BUILTIN_ABS: u8 = 33;
+const BUILTIN_ZERO_Q: u8 = 34; // zero?
+const BUILTIN_POSITIVE_Q: u8 = 35; // positive?
+const BUILTIN_NEGATIVE_Q: u8 = 36; // negative?
+
+// ============================================================================
+// Comparison Operators
+// ============================================================================
+
+fn builtin_lte<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 2 {
+        return Err(ErrorCode::ArityError);
+    }
+    let a = arena.list_nth(args, 0).unwrap();
+    let b = arena.list_nth(args, 1).unwrap();
+
+    let lte = match (arena.get(a.inner), arena.get(b.inner)) {
+        (Some(Value::Number(x)), Some(Value::Number(y))) => x <= y,
+        _ => return Err(ErrorCode::RequiresNumbers),
+    };
+
+    arena.bool_val(lte)
+}
+
+fn builtin_gte<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 2 {
+        return Err(ErrorCode::ArityError);
+    }
+    let a = arena.list_nth(args, 0).unwrap();
+    let b = arena.list_nth(args, 1).unwrap();
+
+    let gte = match (arena.get(a.inner), arena.get(b.inner)) {
+        (Some(Value::Number(x)), Some(Value::Number(y))) => x >= y,
+        _ => return Err(ErrorCode::RequiresNumbers),
+    };
+
+    arena.bool_val(gte)
+}
+
+// ============================================================================
+// Numeric Operations
+// ============================================================================
+
+fn builtin_min<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) < 1 {
+        return Err(ErrorCode::ArityError);
+    }
+
+    let first = arena.list_nth(args, 0).unwrap();
+    let mut min_val = if let Some(Value::Number(n)) = arena.get(first.inner) {
+        n
+    } else {
+        return Err(ErrorCode::RequiresNumbers);
+    };
+
+    let mut current = if let Some(Value::Cons(_, cdr)) = arena.get(args.inner) {
+        Ref::new(arena, cdr)
+    } else {
+        return arena.number(min_val);
+    };
+
+    loop {
+        match arena.get(current.inner) {
+            Some(Value::Cons(car, cdr)) => {
+                if let Some(Value::Number(n)) = arena.get(car) {
+                    if n < min_val {
+                        min_val = n;
+                    }
+                    current = Ref::new(arena, cdr);
+                } else {
+                    return Err(ErrorCode::RequiresNumbers);
+                }
+            }
+            Some(Value::Nil) => break,
+            _ => return Err(ErrorCode::InvalidArgs),
+        }
+    }
+
+    arena.number(min_val)
+}
+
+fn builtin_max<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) < 1 {
+        return Err(ErrorCode::ArityError);
+    }
+
+    let first = arena.list_nth(args, 0).unwrap();
+    let mut max_val = if let Some(Value::Number(n)) = arena.get(first.inner) {
+        n
+    } else {
+        return Err(ErrorCode::RequiresNumbers);
+    };
+
+    let mut current = if let Some(Value::Cons(_, cdr)) = arena.get(args.inner) {
+        Ref::new(arena, cdr)
+    } else {
+        return arena.number(max_val);
+    };
+
+    loop {
+        match arena.get(current.inner) {
+            Some(Value::Cons(car, cdr)) => {
+                if let Some(Value::Number(n)) = arena.get(car) {
+                    if n > max_val {
+                        max_val = n;
+                    }
+                    current = Ref::new(arena, cdr);
+                } else {
+                    return Err(ErrorCode::RequiresNumbers);
+                }
+            }
+            Some(Value::Nil) => break,
+            _ => return Err(ErrorCode::InvalidArgs),
+        }
+    }
+
+    arena.number(max_val)
+}
+
+fn builtin_modulo<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 2 {
+        return Err(ErrorCode::ArityError);
+    }
+
+    let a = arena.list_nth(args, 0).unwrap();
+    let b = arena.list_nth(args, 1).unwrap();
+
+    let result = match (arena.get(a.inner), arena.get(b.inner)) {
+        (Some(Value::Number(x)), Some(Value::Number(y))) => {
+            if y == 0 {
+                return Err(ErrorCode::DivisionByZero);
+            }
+            x % y
+        }
+        _ => return Err(ErrorCode::RequiresNumbers),
+    };
+
+    arena.number(result)
+}
+
+fn builtin_quotient<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 2 {
+        return Err(ErrorCode::ArityError);
+    }
+
+    let a = arena.list_nth(args, 0).unwrap();
+    let b = arena.list_nth(args, 1).unwrap();
+
+    let result = match (arena.get(a.inner), arena.get(b.inner)) {
+        (Some(Value::Number(x)), Some(Value::Number(y))) => {
+            if y == 0 {
+                return Err(ErrorCode::DivisionByZero);
+            }
+            x / y // Integer division (truncates toward zero)
+        }
+        _ => return Err(ErrorCode::RequiresNumbers),
+    };
+
+    arena.number(result)
+}
+
+fn builtin_abs<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 1 {
+        return Err(ErrorCode::ArityError);
+    }
+
+    let val = arena.list_nth(args, 0).unwrap();
+
+    let result = match arena.get(val.inner) {
+        Some(Value::Number(n)) => n.abs(),
+        _ => return Err(ErrorCode::RequiresNumbers),
+    };
+
+    arena.number(result)
+}
+
+// ============================================================================
+// Numeric Predicates
+// ============================================================================
+
+fn builtin_zero_q<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 1 {
+        return Err(ErrorCode::ArityError);
+    }
+
+    let val = arena.list_nth(args, 0).unwrap();
+
+    let is_zero = match arena.get(val.inner) {
+        Some(Value::Number(n)) => n == 0,
+        _ => return Err(ErrorCode::RequiresNumbers),
+    };
+
+    arena.bool_val(is_zero)
+}
+
+fn builtin_positive_q<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 1 {
+        return Err(ErrorCode::ArityError);
+    }
+
+    let val = arena.list_nth(args, 0).unwrap();
+
+    let is_positive = match arena.get(val.inner) {
+        Some(Value::Number(n)) => n > 0,
+        _ => return Err(ErrorCode::RequiresNumbers),
+    };
+
+    arena.bool_val(is_positive)
+}
+
+fn builtin_negative_q<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 1 {
+        return Err(ErrorCode::ArityError);
+    }
+
+    let val = arena.list_nth(args, 0).unwrap();
+
+    let is_negative = match arena.get(val.inner) {
+        Some(Value::Number(n)) => n < 0,
+        _ => return Err(ErrorCode::RequiresNumbers),
+    };
+
+    arena.bool_val(is_negative)
+}
 fn call_builtin<'arena, const N: usize>(
     arena: &'arena Arena<N>,
     idx: u8,
@@ -667,6 +928,18 @@ fn call_builtin<'arena, const N: usize>(
         BUILTIN_LENGTH => builtin_length(arena, args),
         BUILTIN_APPEND => builtin_append(arena, args),
         BUILTIN_REVERSE => builtin_reverse(arena, args),
+        BUILTIN_NOT => builtin_not(arena, args),
+        BUILTIN_NUMBER_Q => builtin_number_q(arena, args),
+        BUILTIN_PAIR_Q => builtin_pair_q(arena, args),
+        BUILTIN_SYMBOL_Q => builtin_symbol_q(arena, args),
+        BUILTIN_PROCEDURE_Q => builtin_procedure_q(arena, args),
+        BUILTIN_EQ_Q => builtin_eq_q(arena, args),
+        BUILTIN_EQUAL_Q => builtin_equal_q(arena, args),
+        BUILTIN_MAP => builtin_map(arena, args),
+        BUILTIN_FILTER => builtin_filter(arena, args),
+        BUILTIN_FOLDL => builtin_foldl(arena, args),
+        BUILTIN_DISPLAY => builtin_display(arena, args),
+        BUILTIN_NEWLINE => builtin_newline(arena, args),
         _ => Err(ErrorCode::UnknownBuiltin),
     }
 }
@@ -980,6 +1253,337 @@ fn builtin_reverse<'arena, const N: usize>(
     let list = arena.list_nth(args, 0).unwrap();
     arena.reverse_list(&list)
 }
+// ============================================================================
+// TIER 1: Essential Builtins (Add These First!)
+// ============================================================================
+
+// Add to your builtin constants:
+const BUILTIN_NOT: u8 = 15;
+const BUILTIN_NUMBER_Q: u8 = 16;
+const BUILTIN_PAIR_Q: u8 = 17;
+const BUILTIN_SYMBOL_Q: u8 = 18;
+const BUILTIN_PROCEDURE_Q: u8 = 19;
+const BUILTIN_EQ_Q: u8 = 20; // eq? for identity comparison
+const BUILTIN_EQUAL_Q: u8 = 21; // equal? for deep equality
+const BUILTIN_MAP: u8 = 22;
+const BUILTIN_FILTER: u8 = 23;
+const BUILTIN_FOLDL: u8 = 24; // fold-left
+const BUILTIN_DISPLAY: u8 = 25;
+const BUILTIN_NEWLINE: u8 = 26;
+
+// ============================================================================
+// Type Predicates - Essential for type checking
+// ============================================================================
+
+fn builtin_number_q<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 1 {
+        return Err(ErrorCode::ArityError);
+    }
+    let val = arena.list_nth(args, 0).unwrap();
+    let is_num = matches!(arena.get(val.inner), Some(Value::Number(_)));
+    arena.bool_val(is_num)
+}
+
+fn builtin_pair_q<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 1 {
+        return Err(ErrorCode::ArityError);
+    }
+    let val = arena.list_nth(args, 0).unwrap();
+    let is_pair = matches!(arena.get(val.inner), Some(Value::Cons(_, _)));
+    arena.bool_val(is_pair)
+}
+
+fn builtin_symbol_q<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 1 {
+        return Err(ErrorCode::ArityError);
+    }
+    let val = arena.list_nth(args, 0).unwrap();
+    let is_sym = matches!(arena.get(val.inner), Some(Value::Symbol(_)));
+    arena.bool_val(is_sym)
+}
+
+fn builtin_procedure_q<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 1 {
+        return Err(ErrorCode::ArityError);
+    }
+    let val = arena.list_nth(args, 0).unwrap();
+    let is_proc = matches!(
+        arena.get(val.inner),
+        Some(Value::Lambda(..)) | Some(Value::Builtin(_))
+    );
+    arena.bool_val(is_proc)
+}
+
+// ============================================================================
+// Logic - 'not' is essential
+// ============================================================================
+
+fn builtin_not<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 1 {
+        return Err(ErrorCode::ArityError);
+    }
+    let val = arena.list_nth(args, 0).unwrap();
+
+    // In Scheme, only #f is false, everything else is true
+    let is_false = matches!(arena.get(val.inner), Some(Value::Bool(false)));
+    arena.bool_val(is_false)
+}
+
+// ============================================================================
+// Equality - eq? (identity) and equal? (structural)
+// ============================================================================
+
+fn builtin_eq_q<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 2 {
+        return Err(ErrorCode::ArityError);
+    }
+    let a = arena.list_nth(args, 0).unwrap();
+    let b = arena.list_nth(args, 1).unwrap();
+
+    // Identity comparison - same object in memory
+    let eq = a.inner.0 == b.inner.0;
+    arena.bool_val(eq)
+}
+
+fn builtin_equal_q<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 2 {
+        return Err(ErrorCode::ArityError);
+    }
+    let a = arena.list_nth(args, 0).unwrap();
+    let b = arena.list_nth(args, 1).unwrap();
+
+    let eq = values_equal(arena, &a, &b);
+    arena.bool_val(eq)
+}
+
+fn values_equal<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    a: &Ref<'arena, N>,
+    b: &Ref<'arena, N>,
+) -> bool {
+    match (arena.get(a.inner), arena.get(b.inner)) {
+        (Some(Value::Number(x)), Some(Value::Number(y))) => x == y,
+        (Some(Value::Bool(x)), Some(Value::Bool(y))) => x == y,
+        (Some(Value::Char(x)), Some(Value::Char(y))) => x == y,
+        (Some(Value::Nil), Some(Value::Nil)) => true,
+        (Some(Value::Symbol(s1)), Some(Value::Symbol(s2))) => {
+            let s1_ref = Ref::new(arena, s1);
+            let s2_ref = Ref::new(arena, s2);
+            arena.str_eq(&s1_ref, &s2_ref)
+        }
+        (Some(Value::Cons(a1, a2)), Some(Value::Cons(b1, b2))) => {
+            let a1_ref = Ref::new(arena, a1);
+            let a2_ref = Ref::new(arena, a2);
+            let b1_ref = Ref::new(arena, b1);
+            let b2_ref = Ref::new(arena, b2);
+            values_equal(arena, &a1_ref, &b1_ref) && values_equal(arena, &a2_ref, &b2_ref)
+        }
+        _ => false,
+    }
+}
+
+// ============================================================================
+// Higher-Order Functions - map, filter, fold
+// ============================================================================
+
+fn builtin_map<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    // (map proc list)
+    if arena.list_len(args) != 2 {
+        return Err(ErrorCode::ArityError);
+    }
+
+    let proc = arena.list_nth(args, 0).unwrap();
+    let list = arena.list_nth(args, 1).unwrap();
+
+    let mut result = arena.nil()?;
+    let mut current = list.clone();
+
+    loop {
+        match arena.get(current.inner) {
+            Some(Value::Cons(car, cdr)) => {
+                let car_ref = Ref::new(arena, car);
+
+                // Create argument list for procedure
+                let nil = arena.nil()?;
+                let proc_args = arena.cons(&car_ref, &nil)?;
+
+                // Apply procedure
+                let mapped_val = match arena.get(proc.inner) {
+                    Some(Value::Builtin(idx)) => call_builtin(arena, idx, &proc_args)?,
+                    Some(Value::Lambda(..)) => match apply(arena, &proc, &proc_args)? {
+                        EvalResult::Done(v) => v,
+                        EvalResult::TailCall(expr, env) => eval(arena, &expr, &env)?,
+                    },
+                    _ => return Err(ErrorCode::NotCallable),
+                };
+
+                result = arena.cons(&mapped_val, &result)?;
+                current = Ref::new(arena, cdr);
+            }
+            Some(Value::Nil) => break,
+            _ => return Err(ErrorCode::InvalidArgs),
+        }
+    }
+
+    arena.reverse_list(&result)
+}
+
+fn builtin_filter<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    // (filter pred list)
+    if arena.list_len(args) != 2 {
+        return Err(ErrorCode::ArityError);
+    }
+
+    let pred = arena.list_nth(args, 0).unwrap();
+    let list = arena.list_nth(args, 1).unwrap();
+
+    let mut result = arena.nil()?;
+    let mut current = list.clone();
+
+    loop {
+        match arena.get(current.inner) {
+            Some(Value::Cons(car, cdr)) => {
+                let car_ref = Ref::new(arena, car);
+
+                // Create argument list
+                let nil = arena.nil()?;
+                let pred_args = arena.cons(&car_ref, &nil)?;
+
+                // Apply predicate
+                let pred_result = match arena.get(pred.inner) {
+                    Some(Value::Builtin(idx)) => call_builtin(arena, idx, &pred_args)?,
+                    Some(Value::Lambda(..)) => match apply(arena, &pred, &pred_args)? {
+                        EvalResult::Done(v) => v,
+                        EvalResult::TailCall(expr, env) => eval(arena, &expr, &env)?,
+                    },
+                    _ => return Err(ErrorCode::NotCallable),
+                };
+
+                // Check if predicate returned true
+                let keep = !matches!(arena.get(pred_result.inner), Some(Value::Bool(false)));
+
+                if keep {
+                    result = arena.cons(&car_ref, &result)?;
+                }
+
+                current = Ref::new(arena, cdr);
+            }
+            Some(Value::Nil) => break,
+            _ => return Err(ErrorCode::InvalidArgs),
+        }
+    }
+
+    arena.reverse_list(&result)
+}
+
+fn builtin_foldl<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    // (foldl proc init list)
+    if arena.list_len(args) != 3 {
+        return Err(ErrorCode::ArityError);
+    }
+
+    let proc = arena.list_nth(args, 0).unwrap();
+    let mut acc = arena.list_nth(args, 1).unwrap();
+    let list = arena.list_nth(args, 2).unwrap();
+
+    let mut current = list.clone();
+
+    loop {
+        match arena.get(current.inner) {
+            Some(Value::Cons(car, cdr)) => {
+                let car_ref = Ref::new(arena, car);
+
+                // Create argument list: (proc acc element)
+                let nil = arena.nil()?;
+                let args2 = arena.cons(&car_ref, &nil)?;
+                let proc_args = arena.cons(&acc, &args2)?;
+
+                // Apply procedure
+                acc = match arena.get(proc.inner) {
+                    Some(Value::Builtin(idx)) => call_builtin(arena, idx, &proc_args)?,
+                    Some(Value::Lambda(..)) => match apply(arena, &proc, &proc_args)? {
+                        EvalResult::Done(v) => v,
+                        EvalResult::TailCall(expr, env) => eval(arena, &expr, &env)?,
+                    },
+                    _ => return Err(ErrorCode::NotCallable),
+                };
+
+                current = Ref::new(arena, cdr);
+            }
+            Some(Value::Nil) => break,
+            _ => return Err(ErrorCode::InvalidArgs),
+        }
+    }
+
+    Ok(acc)
+}
+
+// ============================================================================
+// I/O - display and newline (useful for debugging)
+// ============================================================================
+
+fn builtin_display<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 1 {
+        return Err(ErrorCode::ArityError);
+    }
+
+    let val = arena.list_nth(args, 0).unwrap();
+
+    // In a real implementation, you'd print to stdout
+    // For no_std, you might use a callback or buffer
+    // For now, just return the value
+
+    // Example if you have a print callback:
+    // print_value(arena, &val);
+
+    arena.nil()
+}
+
+fn builtin_newline<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    args: &Ref<'arena, N>,
+) -> Result<Ref<'arena, N>, ErrorCode> {
+    if arena.list_len(args) != 0 {
+        return Err(ErrorCode::ArityError);
+    }
+
+    // print!("\n");
+
+    arena.nil()
+}
 
 fn register_builtins<'arena, const N: usize>(
     arena: &'arena Arena<N>,
@@ -1001,6 +1605,28 @@ fn register_builtins<'arena, const N: usize>(
         ("length", BUILTIN_LENGTH),
         ("append", BUILTIN_APPEND),
         ("reverse", BUILTIN_REVERSE),
+        ("not", BUILTIN_NOT),
+        ("number?", BUILTIN_NUMBER_Q),
+        ("pair?", BUILTIN_PAIR_Q),
+        ("symbol?", BUILTIN_SYMBOL_Q),
+        ("procedure?", BUILTIN_PROCEDURE_Q),
+        ("eq?", BUILTIN_EQ_Q),
+        ("equal?", BUILTIN_EQUAL_Q),
+        ("map", BUILTIN_MAP),
+        ("filter", BUILTIN_FILTER),
+        ("foldl", BUILTIN_FOLDL),
+        ("display", BUILTIN_DISPLAY),
+        ("newline", BUILTIN_NEWLINE),
+        ("<=", BUILTIN_LTE),
+        (">=", BUILTIN_GTE),
+        ("min", BUILTIN_MIN),
+        ("max", BUILTIN_MAX),
+        ("modulo", BUILTIN_MODULO),
+        ("quotient", BUILTIN_QUOTIENT),
+        ("abs", BUILTIN_ABS),
+        ("zero?", BUILTIN_ZERO_Q),
+        ("positive?", BUILTIN_POSITIVE_Q),
+        ("negative?", BUILTIN_NEGATIVE_Q),
     ];
 
     for (name, idx) in builtins {
