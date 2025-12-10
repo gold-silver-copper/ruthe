@@ -6,8 +6,7 @@ use core::cell::Cell;
 // String Interning System - NO heap allocation!
 // ============================================================================
 
-pub const STRING_TABLE_SIZE: usize = 2048; // Total bytes for string data
-pub const MAX_STRINGS: usize = 256; // Maximum number of unique strings
+pub const STRING_TABLE_SIZE: usize = 4096; // Total bytes for all string data + metadata
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StringId(pub u8);
@@ -20,39 +19,74 @@ impl StringId {
     }
 }
 
+/// Compact string table using inline metadata
+/// Memory layout: [count:u8][id0_offset:u16][id0_len:u8][id1_offset:u16][id1_len:u8]...[string_data...]
+/// This allows up to 255 unique strings (id 0-254, 255 is reserved for INVALID)
 pub struct StringTable {
-    // Raw string data storage
+    // All data in one array: metadata followed by string data
     data: [Cell<u8>; STRING_TABLE_SIZE],
-    // (start_offset, length) for each interned string
-    strings: [Cell<(u16, u16)>; MAX_STRINGS],
-    next_string: Cell<usize>,
-    data_pos: Cell<usize>,
 }
 
 impl StringTable {
     pub const fn new() -> Self {
         StringTable {
             data: [const { Cell::new(0u8) }; STRING_TABLE_SIZE],
-            strings: [const { Cell::new((0, 0)) }; MAX_STRINGS],
-            next_string: Cell::new(0),
-            data_pos: Cell::new(0),
         }
+    }
+
+    /// Get the number of interned strings
+    fn count(&self) -> usize {
+        self.data[0].get() as usize
+    }
+
+    /// Set the number of interned strings
+    fn set_count(&self, count: usize) {
+        self.data[0].set(count as u8);
+    }
+
+    /// Get metadata for a string ID: (offset, length)
+    fn get_metadata(&self, id: u8) -> (u16, u8) {
+        let meta_base = 1 + (id as usize) * 3; // count:1 + id*3 bytes per entry
+        let offset =
+            (self.data[meta_base].get() as u16) | ((self.data[meta_base + 1].get() as u16) << 8);
+        let len = self.data[meta_base + 2].get();
+        (offset, len)
+    }
+
+    /// Set metadata for a string ID
+    fn set_metadata(&self, id: u8, offset: u16, len: u8) {
+        let meta_base = 1 + (id as usize) * 3;
+        self.data[meta_base].set(offset as u8);
+        self.data[meta_base + 1].set((offset >> 8) as u8);
+        self.data[meta_base + 2].set(len);
+    }
+
+    /// Get the start of string data region (after all possible metadata)
+    const fn data_start() -> usize {
+        // count:1 + 255 entries * 3 bytes each = 766 bytes for metadata
+        1 + 255 * 3
     }
 
     /// Intern a string, returning its ID. Returns existing ID if already interned.
     pub fn intern(&self, s: &str) -> Result<StringId, ErrorCode> {
         let bytes = s.as_bytes();
 
-        // Check if already interned
-        for i in 0..self.next_string.get() {
-            let (start, len) = self.strings[i].get();
-            let start = start as usize;
+        if bytes.len() > 255 {
+            return Err(ErrorCode::SymbolTooLong);
+        }
+
+        let count = self.count();
+
+        // Check if already interned (scan existing strings)
+        for i in 0..count {
+            let (offset, len) = self.get_metadata(i as u8);
+            let offset = offset as usize;
             let len = len as usize;
 
             if len == bytes.len() {
                 let mut matches = true;
                 for j in 0..len {
-                    if self.data[start + j].get() != bytes[j] {
+                    if self.data[offset + j].get() != bytes[j] {
                         matches = false;
                         break;
                     }
@@ -63,38 +97,46 @@ impl StringTable {
             }
         }
 
-        // Not found, need to intern
-        let next = self.next_string.get();
-        if next >= MAX_STRINGS {
+        // Not found, need to intern new string
+        if count >= 255 {
             return Err(ErrorCode::StringTableFull);
         }
 
-        let pos = self.data_pos.get();
-        if pos + bytes.len() > STRING_TABLE_SIZE {
+        // Find where to place the new string data
+        let data_offset = if count == 0 {
+            Self::data_start()
+        } else {
+            // After the last string
+            let (last_offset, last_len) = self.get_metadata((count - 1) as u8);
+            last_offset as usize + last_len as usize
+        };
+
+        // Check if we have space
+        if data_offset + bytes.len() > STRING_TABLE_SIZE {
             return Err(ErrorCode::StringTableFull);
         }
 
         // Copy string data
         for (i, &b) in bytes.iter().enumerate() {
-            self.data[pos + i].set(b);
+            self.data[data_offset + i].set(b);
         }
 
-        // Record string location
-        self.strings[next].set((pos as u16, bytes.len() as u16));
-        self.next_string.set(next + 1);
-        self.data_pos.set(pos + bytes.len());
+        // Record metadata
+        let new_id = count as u8;
+        self.set_metadata(new_id, data_offset as u16, bytes.len() as u8);
+        self.set_count(count + 1);
 
-        Ok(StringId(next as u8))
+        Ok(StringId(new_id))
     }
 
     /// Get a string by its ID (copies to provided buffer)
     pub fn get_to_buf<'a>(&self, id: StringId, buf: &'a mut [u8]) -> Option<&'a str> {
-        if !id.is_valid() || (id.0 as usize) >= self.next_string.get() {
+        if !id.is_valid() || (id.0 as usize) >= self.count() {
             return None;
         }
 
-        let (start, len) = self.strings[id.0 as usize].get();
-        let start = start as usize;
+        let (offset, len) = self.get_metadata(id.0);
+        let offset = offset as usize;
         let len = len as usize;
 
         if len > buf.len() {
@@ -102,7 +144,7 @@ impl StringTable {
         }
 
         for i in 0..len {
-            buf[i] = self.data[start + i].get();
+            buf[i] = self.data[offset + i].get();
         }
 
         core::str::from_utf8(&buf[..len]).ok()
@@ -110,12 +152,12 @@ impl StringTable {
 
     /// Check if a StringId matches a given string literal (O(n) but avoids allocation)
     pub fn matches(&self, id: StringId, s: &str) -> bool {
-        if !id.is_valid() || (id.0 as usize) >= self.next_string.get() {
+        if !id.is_valid() || (id.0 as usize) >= self.count() {
             return false;
         }
 
-        let (start, len) = self.strings[id.0 as usize].get();
-        let start = start as usize;
+        let (offset, len) = self.get_metadata(id.0);
+        let offset = offset as usize;
         let len = len as usize;
 
         let bytes = s.as_bytes();
@@ -124,7 +166,7 @@ impl StringTable {
         }
 
         for i in 0..len {
-            if self.data[start + i].get() != bytes[i] {
+            if self.data[offset + i].get() != bytes[i] {
                 return false;
             }
         }
@@ -132,18 +174,38 @@ impl StringTable {
         true
     }
 
-    /// Get a string by its ID (for debugging/display - limited to 64 bytes)
-    pub fn get(&self, id: StringId) -> Option<&'static str> {
-        // This is a limitation of using Cell - we can't return a direct reference
-        // This method should primarily be used for debugging
-        // For comparisons, use eq() or matches() instead
-        None
-    }
-
     /// Compare two string IDs (O(1) operation!)
     pub fn eq(&self, a: StringId, b: StringId) -> bool {
         a.0 == b.0
     }
+
+    /// Get statistics about string table usage
+    pub fn stats(&self) -> StringTableStats {
+        let count = self.count();
+        let data_used = if count == 0 {
+            0
+        } else {
+            let (last_offset, last_len) = self.get_metadata((count - 1) as u8);
+            (last_offset as usize + last_len as usize) - Self::data_start()
+        };
+
+        StringTableStats {
+            string_count: count,
+            data_bytes_used: data_used,
+            data_bytes_total: STRING_TABLE_SIZE - Self::data_start(),
+            metadata_bytes_used: 1 + count * 3,
+            total_bytes_used: Self::data_start() + data_used,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct StringTableStats {
+    pub string_count: usize,
+    pub data_bytes_used: usize,
+    pub data_bytes_total: usize,
+    pub metadata_bytes_used: usize,
+    pub total_bytes_used: usize,
 }
 
 // ============================================================================
