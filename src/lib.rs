@@ -179,19 +179,25 @@ impl Arena {
 // RAII Reference Wrapper - Automatic Reference Counting!
 // ============================================================================
 #[derive(Debug)]
-pub struct Ref<'a> {
-    arena: &'a Arena,
+pub struct Ref {
+    arena: *const Arena,
     inner: ArenaRef,
 }
 
-impl<'a> Ref<'a> {
-    pub fn new(arena: &'a Arena, r: ArenaRef) -> Self {
+impl Ref {
+    pub fn new(arena: &Arena, r: ArenaRef) -> Self {
         arena.incref(r);
-        Ref { arena, inner: r }
+        Ref {
+            arena: arena as *const Arena,
+            inner: r,
+        }
     }
 
-    fn from_alloc(arena: &'a Arena, r: ArenaRef) -> Self {
-        Ref { arena, inner: r }
+    fn from_alloc(arena: &Arena, r: ArenaRef) -> Self {
+        Ref {
+            arena: arena as *const Arena,
+            inner: r,
+        }
     }
 
     pub fn raw(&self) -> ArenaRef {
@@ -199,17 +205,21 @@ impl<'a> Ref<'a> {
     }
 
     pub fn get(&self) -> Option<Value> {
-        self.arena.get(self.inner)
+        unsafe { (*self.arena).get(self.inner) }
     }
 
     pub fn is_null(&self) -> bool {
         self.inner.is_null()
     }
+
+    fn arena(&self) -> &Arena {
+        unsafe { &*self.arena }
+    }
 }
 
-impl<'a> Clone for Ref<'a> {
+impl Clone for Ref {
     fn clone(&self) -> Self {
-        self.arena.incref(self.inner);
+        self.arena().incref(self.inner);
         Ref {
             arena: self.arena,
             inner: self.inner,
@@ -217,13 +227,13 @@ impl<'a> Clone for Ref<'a> {
     }
 }
 
-impl<'a> Drop for Ref<'a> {
+impl Drop for Ref {
     fn drop(&mut self) {
-        self.arena.decref(self.inner);
+        self.arena().decref(self.inner);
     }
 }
 
-impl<'a> Deref for Ref<'a> {
+impl Deref for Ref {
     type Target = ArenaRef;
 
     fn deref(&self) -> &Self::Target {
@@ -372,7 +382,7 @@ pub fn env_new(arena: &Arena) -> Ref {
     env
 }
 
-pub fn env_with_parent<'a>(arena: &'a Arena, parent: &Ref<'a>) -> Ref<'a> {
+pub fn env_with_parent(arena: &Arena, parent: &Ref) -> Ref {
     let nil = arena.nil();
     arena.cons(&nil, parent)
 }
@@ -390,7 +400,7 @@ pub fn env_set(arena: &Arena, env: &Ref, name: &Ref, value: &Ref) {
     }
 }
 
-pub fn env_get<'a>(arena: &'a Arena, env: &Ref<'a>, name: &Ref<'a>) -> Option<Ref<'a>> {
+pub fn env_get(arena: &Arena, env: &Ref, name: &Ref) -> Option<Ref> {
     let mut current_env = env.clone();
     loop {
         match arena.get(*current_env) {
@@ -443,7 +453,7 @@ const BUILTIN_LENGTH: u8 = 12;
 const BUILTIN_APPEND: u8 = 13;
 const BUILTIN_REVERSE: u8 = 14;
 
-type BuiltinFn = for<'a> fn(&'a Arena, &Ref<'a>) -> Result<Ref<'a>, Ref<'a>>;
+type BuiltinFn = fn(&Arena, &Ref) -> Result<Ref, Ref>;
 
 const BUILTINS: [BuiltinFn; 15] = [
     builtin_add,
@@ -463,7 +473,7 @@ const BUILTINS: [BuiltinFn; 15] = [
     builtin_reverse,
 ];
 
-fn call_builtin<'a>(arena: &'a Arena, idx: u8, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn call_builtin(arena: &Arena, idx: u8, args: &Ref) -> Result<Ref, Ref> {
     if (idx as usize) < BUILTINS.len() {
         BUILTINS[idx as usize](arena, args)
     } else {
@@ -471,7 +481,7 @@ fn call_builtin<'a>(arena: &'a Arena, idx: u8, args: &Ref<'a>) -> Result<Ref<'a>
     }
 }
 
-fn builtin_add<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_add(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     let mut result = 0i64;
     let mut current = args.clone();
 
@@ -495,7 +505,7 @@ fn builtin_add<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>>
     Ok(arena.number(result))
 }
 
-fn builtin_sub<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_sub(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     let len = arena.list_len(args);
     if len == 0 {
         return Err(arena.str_to_list("- requires args"));
@@ -539,7 +549,7 @@ fn builtin_sub<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>>
     Ok(arena.number(result))
 }
 
-fn builtin_mul<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_mul(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     let mut result = 1i64;
     let mut current = args.clone();
 
@@ -563,7 +573,7 @@ fn builtin_mul<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>>
     Ok(arena.number(result))
 }
 
-fn builtin_div<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_div(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     let len = arena.list_len(args);
     if len < 2 {
         return Err(arena.str_to_list("/ requires 2+ args"));
@@ -605,7 +615,7 @@ fn builtin_div<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>>
     Ok(arena.number(result))
 }
 
-fn builtin_eq<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_eq(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     if arena.list_len(args) != 2 {
         return Err(arena.str_to_list("= requires 2 args"));
     }
@@ -620,7 +630,7 @@ fn builtin_eq<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> 
     Ok(arena.bool_val(eq))
 }
 
-fn builtin_lt<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_lt(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     if arena.list_len(args) != 2 {
         return Err(arena.str_to_list("< requires 2 args"));
     }
@@ -635,7 +645,7 @@ fn builtin_lt<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> 
     Ok(arena.bool_val(lt))
 }
 
-fn builtin_gt<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_gt(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     if arena.list_len(args) != 2 {
         return Err(arena.str_to_list("> requires 2 args"));
     }
@@ -650,7 +660,7 @@ fn builtin_gt<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> 
     Ok(arena.bool_val(gt))
 }
 
-fn builtin_car<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_car(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     if arena.list_len(args) != 1 {
         return Err(arena.str_to_list("car requires 1 arg"));
     }
@@ -662,7 +672,7 @@ fn builtin_car<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>>
     }
 }
 
-fn builtin_cdr<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_cdr(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     if arena.list_len(args) != 1 {
         return Err(arena.str_to_list("cdr requires 1 arg"));
     }
@@ -674,7 +684,7 @@ fn builtin_cdr<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>>
     }
 }
 
-fn builtin_cons_fn<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_cons_fn(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     if arena.list_len(args) != 2 {
         return Err(arena.str_to_list("cons requires 2 args"));
     }
@@ -683,11 +693,11 @@ fn builtin_cons_fn<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<
     Ok(arena.cons(&car, &cdr))
 }
 
-fn builtin_list<'a>(_arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_list(_arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     Ok(args.clone())
 }
 
-fn builtin_null<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_null(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     if arena.list_len(args) != 1 {
         return Err(arena.str_to_list("null? requires 1 arg"));
     }
@@ -696,7 +706,7 @@ fn builtin_null<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>
     Ok(arena.bool_val(is_nil))
 }
 
-fn builtin_length<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_length(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     if arena.list_len(args) != 1 {
         return Err(arena.str_to_list("length requires 1 arg"));
     }
@@ -705,7 +715,7 @@ fn builtin_length<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'
     Ok(arena.number(len as i64))
 }
 
-fn builtin_append<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_append(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     let mut result = arena.nil();
     let mut current = args.clone();
 
@@ -736,7 +746,7 @@ fn builtin_append<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'
     Ok(arena.reverse_list(&result))
 }
 
-fn builtin_reverse<'a>(arena: &'a Arena, args: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn builtin_reverse(arena: &Arena, args: &Ref) -> Result<Ref, Ref> {
     if arena.list_len(args) != 1 {
         return Err(arena.str_to_list("reverse requires 1 arg"));
     }
@@ -778,7 +788,7 @@ fn is_delimiter(ch: char) -> bool {
     ch.is_whitespace() || ch == '(' || ch == ')' || ch == '\'' || ch == ';'
 }
 
-pub fn tokenize<'a>(arena: &'a Arena, input: &str) -> Result<Ref<'a>, Ref<'a>> {
+pub fn tokenize(arena: &Arena, input: &str) -> Result<Ref, Ref> {
     let mut result = arena.nil();
     let mut chars = input.chars().peekable();
 
@@ -900,7 +910,7 @@ fn parse_i64(s: &str) -> Result<i64, ()> {
 // Parser
 // ============================================================================
 
-pub fn parse<'a>(arena: &'a Arena, tokens: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+pub fn parse(arena: &Arena, tokens: &Ref) -> Result<Ref, Ref> {
     let (expr, remaining) = parse_one(arena, tokens)?;
     if !matches!(arena.get(*remaining), Some(Value::Nil)) {
         return Err(arena.str_to_list("Extra tokens"));
@@ -908,7 +918,7 @@ pub fn parse<'a>(arena: &'a Arena, tokens: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>>
     Ok(expr)
 }
 
-fn parse_one<'a>(arena: &'a Arena, tokens: &Ref<'a>) -> Result<(Ref<'a>, Ref<'a>), Ref<'a>> {
+fn parse_one(arena: &Arena, tokens: &Ref) -> Result<(Ref, Ref), Ref> {
     match arena.get(**tokens) {
         Some(Value::Nil) => Err(arena.str_to_list("Unexpected EOF")),
         Some(Value::Cons(first, rest)) => {
@@ -946,7 +956,7 @@ fn parse_one<'a>(arena: &'a Arena, tokens: &Ref<'a>) -> Result<(Ref<'a>, Ref<'a>
     }
 }
 
-fn parse_list<'a>(arena: &'a Arena, tokens: &Ref<'a>) -> Result<(Ref<'a>, Ref<'a>), Ref<'a>> {
+fn parse_list(arena: &Arena, tokens: &Ref) -> Result<(Ref, Ref), Ref> {
     let mut items = arena.nil();
     let mut current = tokens.clone();
 
@@ -977,7 +987,7 @@ fn parse_list<'a>(arena: &'a Arena, tokens: &Ref<'a>) -> Result<(Ref<'a>, Ref<'a
 // Evaluator with PROPER Tail Call Optimization
 // ============================================================================
 
-pub fn eval<'a>(arena: &'a Arena, expr: &Ref<'a>, env: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+pub fn eval(arena: &Arena, expr: &Ref, env: &Ref) -> Result<Ref, Ref> {
     let mut current_expr = expr.clone();
     let mut current_env = env.clone();
 
@@ -992,16 +1002,12 @@ pub fn eval<'a>(arena: &'a Arena, expr: &Ref<'a>, env: &Ref<'a>) -> Result<Ref<'
     }
 }
 
-pub enum EvalResult<'a> {
-    Done(Ref<'a>),
-    TailCall(Ref<'a>, Ref<'a>),
+pub enum EvalResult {
+    Done(Ref),
+    TailCall(Ref, Ref),
 }
 
-fn eval_step<'a>(
-    arena: &'a Arena,
-    expr: &Ref<'a>,
-    env: &Ref<'a>,
-) -> Result<EvalResult<'a>, Ref<'a>> {
+fn eval_step(arena: &Arena, expr: &Ref, env: &Ref) -> Result<EvalResult, Ref> {
     match arena.get(**expr) {
         Some(Value::Number(_))
         | Some(Value::Bool(_))
@@ -1049,12 +1055,9 @@ fn eval_step<'a>(
                 }
             }
 
-            // KEY CHANGE: Don't call eval recursively in apply
-            // Instead, eval the function and args, then let apply return TailCall
             let func = eval(arena, &car_ref, env)?;
             let args = eval_args(arena, expr, env)?;
 
-            // Apply now returns EvalResult, enabling TCO
             apply(arena, &func, &args)
         }
         Some(Value::Nil) => Ok(EvalResult::Done(arena.nil())),
@@ -1062,7 +1065,7 @@ fn eval_step<'a>(
     }
 }
 
-fn eval_if<'a>(arena: &'a Arena, expr: &Ref<'a>, env: &Ref<'a>) -> Result<EvalResult<'a>, Ref<'a>> {
+fn eval_if(arena: &Arena, expr: &Ref, env: &Ref) -> Result<EvalResult, Ref> {
     if arena.list_len(expr) != 4 {
         return Err(arena.str_to_list("if requires 3 args"));
     }
@@ -1085,11 +1088,7 @@ fn eval_if<'a>(arena: &'a Arena, expr: &Ref<'a>, env: &Ref<'a>) -> Result<EvalRe
     Ok(EvalResult::TailCall(branch, env.clone()))
 }
 
-fn eval_lambda<'a>(
-    arena: &'a Arena,
-    expr: &Ref<'a>,
-    env: &Ref<'a>,
-) -> Result<EvalResult<'a>, Ref<'a>> {
+fn eval_lambda(arena: &Arena, expr: &Ref, env: &Ref) -> Result<EvalResult, Ref> {
     if arena.list_len(expr) != 3 {
         return Err(arena.str_to_list("lambda requires 2 args"));
     }
@@ -1100,11 +1099,7 @@ fn eval_lambda<'a>(
     Ok(EvalResult::Done(arena.lambda(&params, &body, env)))
 }
 
-fn eval_define<'a>(
-    arena: &'a Arena,
-    expr: &Ref<'a>,
-    env: &Ref<'a>,
-) -> Result<EvalResult<'a>, Ref<'a>> {
+fn eval_define(arena: &Arena, expr: &Ref, env: &Ref) -> Result<EvalResult, Ref> {
     if arena.list_len(expr) != 3 {
         return Err(arena.str_to_list("define requires 2 args"));
     }
@@ -1123,7 +1118,7 @@ fn eval_define<'a>(
     Ok(EvalResult::Done(value))
 }
 
-fn eval_args<'a>(arena: &'a Arena, expr: &Ref<'a>, env: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+fn eval_args(arena: &Arena, expr: &Ref, env: &Ref) -> Result<Ref, Ref> {
     let mut result = arena.nil();
     let mut current = if let Some(Value::Cons(_, cdr)) = arena.get(**expr) {
         Ref::new(arena, cdr)
@@ -1149,11 +1144,9 @@ fn eval_args<'a>(arena: &'a Arena, expr: &Ref<'a>, env: &Ref<'a>) -> Result<Ref<
     Ok(arena.reverse_list(&result))
 }
 
-// KEY CHANGE: apply now returns EvalResult for proper TCO
-fn apply<'a>(arena: &'a Arena, func: &Ref<'a>, args: &Ref<'a>) -> Result<EvalResult<'a>, Ref<'a>> {
+fn apply(arena: &Arena, func: &Ref, args: &Ref) -> Result<EvalResult, Ref> {
     match arena.get(**func) {
         Some(Value::Builtin(idx)) => {
-            // Builtins always return Done
             let result = call_builtin(arena, idx, args)?;
             Ok(EvalResult::Done(result))
         }
@@ -1183,8 +1176,6 @@ fn apply<'a>(arena: &'a Arena, func: &Ref<'a>, args: &Ref<'a>) -> Result<EvalRes
             }
 
             let body_ref = Ref::new(arena, body);
-            // CRITICAL: Return TailCall instead of calling eval recursively!
-            // This allows the main eval loop to handle it iteratively
             Ok(EvalResult::TailCall(body_ref, call_env))
         }
         _ => Err(arena.str_to_list("Not callable")),
@@ -1195,7 +1186,7 @@ fn apply<'a>(arena: &'a Arena, func: &Ref<'a>, args: &Ref<'a>) -> Result<EvalRes
 // High-level API
 // ============================================================================
 
-pub fn eval_string<'a>(arena: &'a Arena, input: &str, env: &Ref<'a>) -> Result<Ref<'a>, Ref<'a>> {
+pub fn eval_string(arena: &Arena, input: &str, env: &Ref) -> Result<Ref, Ref> {
     let tokens = tokenize(arena, input)?;
     let expr = parse(arena, &tokens)?;
     eval(arena, &expr, env)
