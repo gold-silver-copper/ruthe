@@ -23,7 +23,7 @@ fn format_duration(nanos: u128) -> String {
     }
 }
 
-fn format_value(arena: &Arena, val: &Ref) -> String {
+fn format_value<const N: usize>(arena: &Arena<N>, val: &Ref<N>) -> String {
     match arena.get(**val) {
         Some(Value::Number(n)) => format!("{}", n),
         Some(Value::Bool(true)) => String::from("#t"),
@@ -83,7 +83,7 @@ fn benchmark_expression(name: &str, expr: &str, iterations: usize) {
     let mut times = Vec::with_capacity(iterations);
 
     for _ in 0..iterations {
-        let arena = Arena::new();
+        let arena = Arena::<10000>::new();
         let env = env_new(&arena);
 
         let start = Instant::now();
@@ -120,7 +120,12 @@ fn benchmark_expression(name: &str, expr: &str, iterations: usize) {
     println!();
 }
 
-fn benchmark_single(arena: &Arena, name: &str, expr: &str, env: &Ref) -> Result<u128, String> {
+fn benchmark_single<const N: usize>(
+    arena: &Arena<N>,
+    name: &str,
+    expr: &str,
+    env: &Ref<N>,
+) -> Result<u128, String> {
     let start = Instant::now();
     let result = eval_string(arena, expr, env).map_err(|e| {
         let mut buf = [0u8; 256];
@@ -220,7 +225,7 @@ fn main() {
 
     // Closure tests - need shared arena
     {
-        let arena = Arena::new();
+        let arena = Arena::<10000>::new();
         let env = env_new(&arena);
 
         let _ = eval_string(
@@ -257,7 +262,7 @@ fn main() {
     println!("└─────────────────────────────────────────────────────────────┘\n");
 
     // Use shared arena for define-based tests
-    let arena = Arena::new();
+    let arena = Arena::<10000>::new();
     let env = env_new(&arena);
 
     // Fibonacci (tree recursion)
@@ -696,7 +701,7 @@ fn main() {
     println!("│ 12. PERFORMANCE SCALING ANALYSIS                            │");
     println!("└─────────────────────────────────────────────────────────────┘\n");
 
-    let arena2 = Arena::new();
+    let arena2 = Arena::<10000>::new();
     let env2 = env_new(&arena2);
 
     let _ = eval_string(
