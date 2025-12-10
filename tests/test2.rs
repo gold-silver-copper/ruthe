@@ -1,6 +1,5 @@
 use core::matches;
 use ruthe::*;
-use std::vec::Vec;
 
 const ARENA_SIZE: usize = DEFAULT_ARENA_SIZE;
 
