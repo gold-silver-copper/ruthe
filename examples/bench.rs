@@ -85,7 +85,10 @@ fn benchmark_expression(name: &str, expr: &str, iterations: usize) {
 
     for _ in 0..iterations {
         let arena = Arena::<10000>::new();
-        let env = env_new(&arena);
+        let env = match env_new(&arena) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
 
         let start = Instant::now();
         let _result = eval_string(&arena, expr, &env);
@@ -128,14 +131,7 @@ fn benchmark_single<'arena, const N: usize>(
     env: &Ref<'arena, N>,
 ) -> Result<u128, String> {
     let start = Instant::now();
-    let result = eval_string(arena, expr, env).map_err(|e| {
-        let mut buf = [0u8; 256];
-        if let Some(s) = arena.list_to_str(&e, &mut buf) {
-            String::from(s)
-        } else {
-            String::from("Error")
-        }
-    })?;
+    let result = eval_string(arena, expr, env).map_err(|e| String::from(e.message()))?;
     let duration = start.elapsed().as_nanos();
     let result_str = format_value(arena, &result);
     println!(
@@ -227,7 +223,13 @@ fn main() {
     // Closure tests - need shared arena
     {
         let arena = Arena::<10000>::new();
-        let env = env_new(&arena);
+        let env = match env_new(&arena) {
+            Ok(e) => e,
+            Err(e) => {
+                println!("ERROR creating env: {}", e.message());
+                return;
+            }
+        };
 
         let _ = eval_string(
             &arena,
@@ -264,7 +266,13 @@ fn main() {
 
     // Use shared arena for define-based tests
     let arena = Arena::<10000>::new();
-    let env = env_new(&arena);
+    let env = match env_new(&arena) {
+        Ok(e) => e,
+        Err(e) => {
+            println!("ERROR creating env: {}", e.message());
+            return;
+        }
+    };
 
     // Fibonacci (tree recursion)
     let fib_result = eval_string(
@@ -280,7 +288,7 @@ fn main() {
     );
 
     if let Err(e) = fib_result {
-        println!("ERROR defining fib: {}", format_value(&arena, &e));
+        println!("ERROR defining fib: {}", e.message());
     } else {
         println!("--- Fibonacci (Tree Recursion) ---");
         for n in [5, 10, 15, 20] {
@@ -311,7 +319,7 @@ fn main() {
     );
 
     if let Err(e) = fact_result {
-        println!("ERROR defining factorial: {}", format_value(&arena, &e));
+        println!("ERROR defining factorial: {}", e.message());
     } else {
         println!("--- Factorial (Tail Recursion) ---");
         for n in [5, 10, 15, 20] {
@@ -344,7 +352,7 @@ fn main() {
     );
 
     if let Err(e) = ack_result {
-        println!("ERROR defining ackermann: {}", format_value(&arena, &e));
+        println!("ERROR defining ackermann: {}", e.message());
     } else {
         println!("--- Ackermann Function (Complex Recursion) ---");
         for (m, n) in [(1, 2), (2, 2), (2, 3), (3, 2)] {
@@ -375,7 +383,7 @@ fn main() {
     );
 
     if let Err(e) = sum_list_result {
-        println!("ERROR defining sum-list: {}", format_value(&arena, &e));
+        println!("ERROR defining sum-list: {}", e.message());
     } else {
         let mut times = Vec::with_capacity(10000);
         for _ in 0..10000 {
@@ -383,7 +391,7 @@ fn main() {
             let result = eval_string(&arena, "(sum-list '(1 2 3 4 5) 0)", &env);
             let duration = start.elapsed();
             if let Err(e) = result {
-                println!("ERROR in sum-list: {}", format_value(&arena, &e));
+                println!("ERROR in sum-list: {}", e.message());
                 break;
             }
             times.push(duration.as_nanos());
@@ -421,7 +429,7 @@ fn main() {
     );
 
     if let Err(e) = countdown_result {
-        println!("ERROR defining countdown: {}", format_value(&arena, &e));
+        println!("ERROR defining countdown: {}", e.message());
     } else {
         println!("--- Countdown (Tail Recursion) ---");
         for size in [1000, 10000, 100000] {
@@ -452,7 +460,7 @@ fn main() {
     );
 
     if let Err(e) = sum_tail_result {
-        println!("ERROR defining sum-tail: {}", format_value(&arena, &e));
+        println!("ERROR defining sum-tail: {}", e.message());
     } else {
         println!("--- Sum with Tail Recursion ---");
         for n in [100, 1000, 10000] {
@@ -490,7 +498,7 @@ fn main() {
     );
 
     if let Err(e) = map_result {
-        println!("ERROR defining map: {}", format_value(&arena, &e));
+        println!("ERROR defining map: {}", e.message());
     } else {
         let mut times = Vec::with_capacity(10000);
         for _ in 0..10000 {
@@ -498,7 +506,7 @@ fn main() {
             let result = eval_string(&arena, "(map (lambda (x) (* x x)) '(1 2 3 4 5))", &env);
             let duration = start.elapsed();
             if let Err(e) = result {
-                println!("ERROR in map: {}", format_value(&arena, &e));
+                println!("ERROR in map: {}", e.message());
                 break;
             }
             times.push(duration.as_nanos());
@@ -531,7 +539,7 @@ fn main() {
     );
 
     if let Err(e) = filter_result {
-        println!("ERROR defining filter: {}", format_value(&arena, &e));
+        println!("ERROR defining filter: {}", e.message());
     } else {
         let mut times = Vec::with_capacity(10000);
         for _ in 0..10000 {
@@ -543,7 +551,7 @@ fn main() {
             );
             let duration = start.elapsed();
             if let Err(e) = result {
-                println!("ERROR in filter: {}", format_value(&arena, &e));
+                println!("ERROR in filter: {}", e.message());
                 break;
             }
             times.push(duration.as_nanos());
@@ -572,7 +580,7 @@ fn main() {
     );
 
     if let Err(e) = compose_result {
-        println!("ERROR defining compose: {}", format_value(&arena, &e));
+        println!("ERROR defining compose: {}", e.message());
     } else {
         let _ = eval_string(&arena, "(define add1 (lambda (x) (+ x 1)))", &env);
         let _ = eval_string(&arena, "(define square (lambda (x) (* x x)))", &env);
@@ -616,7 +624,7 @@ fn main() {
     );
 
     if let Err(e) = build_list_result {
-        println!("ERROR defining build-list: {}", format_value(&arena, &e));
+        println!("ERROR defining build-list: {}", e.message());
     } else {
         println!("--- Building Large Lists ---");
         for size in [10, 50, 100, 500] {
@@ -703,7 +711,13 @@ fn main() {
     println!("└─────────────────────────────────────────────────────────────┘\n");
 
     let arena2 = Arena::<10000>::new();
-    let env2 = env_new(&arena2);
+    let env2 = match env_new(&arena2) {
+        Ok(e) => e,
+        Err(e) => {
+            println!("ERROR creating env2: {}", e.message());
+            return;
+        }
+    };
 
     let _ = eval_string(
         &arena2,
@@ -745,7 +759,7 @@ fn main() {
 
             last_duration = duration;
         } else if let Err(e) = result {
-            println!("fib({}) ERROR: {}", n, format_value(&arena2, &e));
+            println!("fib({}) ERROR: {}", n, e.message());
         }
     }
     println!();
@@ -787,7 +801,7 @@ fn main() {
 
             last_duration = duration;
         } else if let Err(e) = result {
-            println!("countdown({}) ERROR: {}", n, format_value(&arena2, &e));
+            println!("countdown({}) ERROR: {}", n, e.message());
         }
     }
     println!();
