@@ -29,6 +29,311 @@
 
 use ruthe::*;
 
+mod set_tests {
+    use crate::*;
+
+    fn eval_expect_number(arena: &Arena<10000>, code: &str, env: &Ref<10000>, expected: i64) -> Result<(), &'static str> {
+        match eval_string(arena, code, env) {
+            Ok(val) => match arena.get(val.inner) {
+                Some(Value::Number(n)) if n == expected => Ok(()),
+                Some(Value::Number(n)) => {
+                    Err("Number mismatch")
+                }
+                _ => Err("Expected number"),
+            },
+            Err(_) => Err("Evaluation failed"),
+        }
+    }
+
+    fn eval_expect_bool(arena: &Arena<10000>, code: &str, env: &Ref<10000>, expected: bool) -> Result<(), &'static str> {
+        match eval_string(arena, code, env) {
+            Ok(val) => match arena.get(val.inner) {
+                Some(Value::Bool(b)) if b == expected => Ok(()),
+                Some(Value::Bool(_)) => Err("Bool mismatch"),
+                _ => Err("Expected bool"),
+            },
+            Err(_) => Err("Evaluation failed"),
+        }
+    }
+
+    fn eval_expect_error(arena: &Arena<10000>, code: &str, env: &Ref<10000>) -> Result<(), &'static str> {
+        match eval_string(arena, code, env) {
+            Ok(_) => Err("Expected error but got success"),
+            Err(_) => Ok(()),
+        }
+    }
+
+    #[test]
+    fn test_set_basic_mutation() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        // Define a variable
+        eval_string(&arena, "(define x 10)", &env).unwrap();
+        
+        // Mutate it
+        eval_string(&arena, "(set! x 20)", &env).unwrap();
+        
+        // Check the new value
+        eval_expect_number(&arena, "x", &env, 20).unwrap();
+    }
+
+    #[test]
+    fn test_set_returns_new_value() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        eval_string(&arena, "(define x 10)", &env).unwrap();
+        
+        // set! should return the new value
+        eval_expect_number(&arena, "(set! x 42)", &env, 42).unwrap();
+    }
+
+    #[test]
+    fn test_set_unbound_variable_fails() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        // Trying to set! an undefined variable should fail
+        eval_expect_error(&arena, "(set! nonexistent 123)", &env).unwrap();
+    }
+
+    #[test]
+    fn test_set_with_expression() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        eval_string(&arena, "(define x 10)", &env).unwrap();
+        eval_string(&arena, "(define y 5)", &env).unwrap();
+        
+        // set! with a computed value
+        eval_string(&arena, "(set! x (+ y 15))", &env).unwrap();
+        
+        eval_expect_number(&arena, "x", &env, 20).unwrap();
+    }
+
+    #[test]
+    fn test_set_multiple_mutations() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        eval_string(&arena, "(define counter 0)", &env).unwrap();
+        
+        eval_string(&arena, "(set! counter (+ counter 1))", &env).unwrap();
+        eval_expect_number(&arena, "counter", &env, 1).unwrap();
+        
+        eval_string(&arena, "(set! counter (+ counter 1))", &env).unwrap();
+        eval_expect_number(&arena, "counter", &env, 2).unwrap();
+        
+        eval_string(&arena, "(set! counter (+ counter 1))", &env).unwrap();
+        eval_expect_number(&arena, "counter", &env, 3).unwrap();
+    }
+
+    #[test]
+    fn test_set_in_lambda_closure() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        // Create a counter closure
+        let code = r#"
+            (define make-counter
+              (lambda ()
+                (define count 0)
+                (lambda ()
+                  (set! count (+ count 1))
+                  count)))
+        "#;
+        eval_string(&arena, code, &env).unwrap();
+        
+        eval_string(&arena, "(define c1 (make-counter))", &env).unwrap();
+        
+        eval_expect_number(&arena, "(c1)", &env, 1).unwrap();
+        eval_expect_number(&arena, "(c1)", &env, 2).unwrap();
+        eval_expect_number(&arena, "(c1)", &env, 3).unwrap();
+    }
+
+    #[test]
+    fn test_set_independent_closures() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        let code = r#"
+            (define make-counter
+              (lambda ()
+                (define count 0)
+                (lambda ()
+                  (set! count (+ count 1))
+                  count)))
+        "#;
+        eval_string(&arena, code, &env).unwrap();
+        
+        eval_string(&arena, "(define c1 (make-counter))", &env).unwrap();
+        eval_string(&arena, "(define c2 (make-counter))", &env).unwrap();
+        
+        eval_expect_number(&arena, "(c1)", &env, 1).unwrap();
+        eval_expect_number(&arena, "(c1)", &env, 2).unwrap();
+        eval_expect_number(&arena, "(c2)", &env, 1).unwrap();
+        eval_expect_number(&arena, "(c1)", &env, 3).unwrap();
+        eval_expect_number(&arena, "(c2)", &env, 2).unwrap();
+    }
+
+    #[test]
+    fn test_set_in_nested_scope() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        // Variable in outer scope, modified in inner scope
+        eval_string(&arena, "(define x 10)", &env).unwrap();
+        
+        let code = r#"
+            (define mutate-x
+              (lambda (val)
+                (set! x val)))
+        "#;
+        eval_string(&arena, code, &env).unwrap();
+        
+        eval_string(&arena, "(mutate-x 42)", &env).unwrap();
+        eval_expect_number(&arena, "x", &env, 42).unwrap();
+    }
+
+    #[test]
+    fn test_set_shadowed_variable() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        // This tests that set! finds the correct binding in nested scopes
+        eval_string(&arena, "(define x 10)", &env).unwrap();
+        
+        let code = r#"
+            (define test
+              (lambda ()
+                (define x 20)
+                (set! x 30)
+                x))
+        "#;
+        eval_string(&arena, code, &env).unwrap();
+        
+        // Inner x should be 30
+        eval_expect_number(&arena, "(test)", &env, 30).unwrap();
+        
+        // Outer x should still be 10
+        eval_expect_number(&arena, "x", &env, 10).unwrap();
+    }
+
+    #[test]
+    fn test_set_with_recursion() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        // Accumulator pattern with set!
+        let code = r#"
+            (define factorial-iter
+              (lambda (n)
+                (define result 1)
+                (define counter n)
+                (define iter
+                  (lambda ()
+                    (if (= counter 0)
+                        result
+                        (begin
+                          (set! result (* result counter))
+                          (set! counter (- counter 1))
+                          (iter)))))
+                (iter)))
+        "#;
+        eval_string(&arena, code, &env).unwrap();
+        
+        eval_expect_number(&arena, "(factorial-iter 5)", &env, 120).unwrap();
+    }
+
+    #[test]
+    fn test_set_boolean_value() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        eval_string(&arena, "(define flag #t)", &env).unwrap();
+        eval_expect_bool(&arena, "flag", &env, true).unwrap();
+        
+        eval_string(&arena, "(set! flag #f)", &env).unwrap();
+        eval_expect_bool(&arena, "flag", &env, false).unwrap();
+    }
+
+    #[test]
+    fn test_set_list_value() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        eval_string(&arena, "(define mylist (list 1 2 3))", &env).unwrap();
+        
+        // Change to a different list
+        eval_string(&arena, "(set! mylist (list 4 5 6))", &env).unwrap();
+        
+        // Check first element is now 4
+        eval_expect_number(&arena, "(car mylist)", &env, 4).unwrap();
+    }
+
+    #[test]
+    fn test_set_wrong_argument_count() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        eval_string(&arena, "(define x 10)", &env).unwrap();
+        
+        // Too few arguments
+        eval_expect_error(&arena, "(set! x)", &env).unwrap();
+        
+        // Too many arguments
+        eval_expect_error(&arena, "(set! x 20 30)", &env).unwrap();
+    }
+
+    #[test]
+    fn test_set_non_symbol_first_arg() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        // First argument must be a symbol
+        eval_expect_error(&arena, "(set! 123 456)", &env).unwrap();
+        eval_expect_error(&arena, "(set! (+ 1 2) 10)", &env).unwrap();
+    }
+
+    #[test]
+    fn test_set_preserves_other_bindings() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        eval_string(&arena, "(define x 10)", &env).unwrap();
+        eval_string(&arena, "(define y 20)", &env).unwrap();
+        eval_string(&arena, "(define z 30)", &env).unwrap();
+        
+        eval_string(&arena, "(set! y 99)", &env).unwrap();
+        
+        eval_expect_number(&arena, "x", &env, 10).unwrap();
+        eval_expect_number(&arena, "y", &env, 99).unwrap();
+        eval_expect_number(&arena, "z", &env, 30).unwrap();
+    }
+
+    #[test]
+    fn test_set_bank_account_example() {
+        let arena = Arena::<10000>::new();
+        let env = env_new(&arena);
+
+        // Classic bank account example from SICP
+        let code = r#"
+            (define make-account
+              (lambda (balance)
+                (lambda (amount)
+                  (set! balance (+ balance amount))
+                  balance)))
+        "#;
+        eval_string(&arena, code, &env).unwrap();
+        
+        eval_string(&arena, "(define acc (make-account 100))", &env).unwrap();
+        
+        eval_expect_number(&arena, "(acc 50)", &env, 150).unwrap();
+        eval_expect_number(&arena, "(acc -25)", &env, 125).unwrap();
+        eval_expect_number(&arena, "(acc 10)", &env, 135).unwrap();
+    }
+}
 #[test]
 fn test_set_basic_mutation() {
     let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
