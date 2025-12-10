@@ -1,256 +1,72 @@
-warning: value assigned to `stack_len` is never read
-  --> src/lib.rs:99:29
-   |
-99 |         let mut stack_len = 0;
-   |                             ^
-   |
-   = help: maybe it is overwritten before being read?
-   = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
-
-warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:166:16
-    |
-166 |     pub fn nil(&self) -> Ref<N> {
-    |                ^^^^^     ^^^^^^ the same lifetime is hidden here
-    |                |
-    |                the lifetime is elided here
-    |
-    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
-    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
-help: use `'_` for type paths
-    |
-166 |     pub fn nil(&self) -> Ref<'_, N> {
-    |                              +++
-
-warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:170:19
-    |
-170 |     pub fn number(&self, n: i64) -> Ref<N> {
-    |                   ^^^^^             ^^^^^^ the same lifetime is hidden here
-    |                   |
-    |                   the lifetime is elided here
-    |
-    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
-help: use `'_` for type paths
-    |
-170 |     pub fn number(&self, n: i64) -> Ref<'_, N> {
-    |                                         +++
-
-warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:174:21
-    |
-174 |     pub fn bool_val(&self, b: bool) -> Ref<N> {
-    |                     ^^^^^              ^^^^^^ the same lifetime is hidden here
-    |                     |
-    |                     the lifetime is elided here
-    |
-    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
-help: use `'_` for type paths
-    |
-174 |     pub fn bool_val(&self, b: bool) -> Ref<'_, N> {
-    |                                            +++
-
-warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:178:21
-    |
-178 |     pub fn char_val(&self, c: char) -> Ref<N> {
-    |                     ^^^^^              ^^^^^^ the same lifetime is hidden here
-    |                     |
-    |                     the lifetime is elided here
-    |
-    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
-help: use `'_` for type paths
-    |
-178 |     pub fn char_val(&self, c: char) -> Ref<'_, N> {
-    |                                            +++
-
-warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:182:17
-    |
-182 |     pub fn cons(&self, car: &Ref<N>, cdr: &Ref<N>) -> Ref<N> {
-    |                 ^^^^^ the lifetime is elided here     ^^^^^^ the same lifetime is hidden here
-    |
-    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
-help: use `'_` for type paths
-    |
-182 |     pub fn cons(&self, car: &Ref<N>, cdr: &Ref<N>) -> Ref<'_, N> {
-    |                                                           +++
-
-warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:188:19
-    |
-188 |     pub fn symbol(&self, s: &Ref<N>) -> Ref<N> {
-    |                   ^^^^^                 ^^^^^^ the same lifetime is hidden here
-    |                   |
-    |                   the lifetime is elided here
-    |
-    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
-help: use `'_` for type paths
-    |
-188 |     pub fn symbol(&self, s: &Ref<N>) -> Ref<'_, N> {
-    |                                             +++
-
-warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:193:19
-    |
-193 |     pub fn lambda(&self, params: &Ref<N>, body: &Ref<N>, env: &Ref<N>) -> Ref<N> {
-    |                   ^^^^^ the lifetime is elided here                       ^^^^^^ the same lifetime is hidden here
-    |
-    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
-help: use `'_` for type paths
-    |
-193 |     pub fn lambda(&self, params: &Ref<N>, body: &Ref<N>, env: &Ref<N>) -> Ref<'_, N> {
-    |                                                                               +++
-
-warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:203:20
-    |
-203 |     pub fn builtin(&self, idx: u8) -> Ref<N> {
-    |                    ^^^^^              ^^^^^^ the same lifetime is hidden here
-    |                    |
-    |                    the lifetime is elided here
-    |
-    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
-help: use `'_` for type paths
-    |
-203 |     pub fn builtin(&self, idx: u8) -> Ref<'_, N> {
-    |                                           +++
-
-warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:275:24
-    |
-275 |     pub fn str_to_list(&self, s: &str) -> Ref<N> {
-    |                        ^^^^^              ^^^^^^ the same lifetime is hidden here
-    |                        |
-    |                        the lifetime is elided here
-    |
-    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
-help: use `'_` for type paths
-    |
-275 |     pub fn str_to_list(&self, s: &str) -> Ref<'_, N> {
-    |                                               +++
-
-warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:341:21
-    |
-341 |     pub fn list_nth(&self, list: &Ref<N>, n: usize) -> Option<Ref<N>> {
-    |                     ^^^^^ the lifetime is elided here         ^^^^^^ the same lifetime is hidden here
-    |
-    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
-help: use `'_` for type paths
-    |
-341 |     pub fn list_nth(&self, list: &Ref<N>, n: usize) -> Option<Ref<'_, N>> {
-    |                                                                   +++
-
-warning: hiding a lifetime that's elided elsewhere is confusing
-   --> src/lib.rs:358:25
-    |
-358 |     pub fn reverse_list(&self, list: &Ref<N>) -> Ref<N> {
-    |                         ^^^^^                    ^^^^^^ the same lifetime is hidden here
-    |                         |
-    |                         the lifetime is elided here
-    |
-    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
-help: use `'_` for type paths
-    |
-358 |     pub fn reverse_list(&self, list: &Ref<N>) -> Ref<'_, N> {
-    |                                                      +++
-
-warning: `ruthe` (lib) generated 12 warnings (run `cargo fix --lib -p ruthe` to apply 11 suggestions)
-warning: unused variable: `num2`
-   --> tests/test2.rs:109:13
-    |
-109 |         let num2 = num.clone();
-    |             ^^^^ help: if this is intentional, prefix it with an underscore: `_num2`
-    |
-    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
-
-warning: `ruthe` (test "test2") generated 1 warning (run `cargo fix --test "test2" -p ruthe` to apply 1 suggestion)
    Compiling ruthe v0.1.0 (/Users/kisaczka/Desktop/code/ruthe)
-warning: unused variable: `used_before`
-   --> tests/test4.rs:144:9
+error[E0277]: `StringId` doesn't implement `Debug`
+   --> src/lib.rs:200:12
     |
-144 |     let used_before = (0..2000)
-    |         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_used_before`
+195 | #[derive(Clone, Copy, Debug, PartialEq)]
+    |                       ----- in this derive macro expansion
+...
+200 |     Symbol(StringId), // NOW USING STRING INTERNING!
+    |            ^^^^^^^^ the trait `Debug` is not implemented for `StringId`
     |
-    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+    = note: add `#[derive(Debug)]` to `StringId` or manually `impl Debug for StringId`
+help: consider annotating `StringId` with `#[derive(Debug)]`
+    |
+ 13 + #[derive(Debug)]
+ 14 | pub struct StringId(pub u8);
+    |
 
-warning: unused variable: `refs`
-   --> tests/test4.rs:269:9
+error[E0369]: binary operation `==` cannot be applied to type `&StringId`
+   --> src/lib.rs:200:12
     |
-269 |     let refs: Vec<_> = refs
-    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_refs`
-
-warning: unused variable: `string`
-   --> tests/test4.rs:301:9
+195 | #[derive(Clone, Copy, Debug, PartialEq)]
+    |                              --------- in this derive macro expansion
+...
+200 |     Symbol(StringId), // NOW USING STRING INTERNING!
+    |            ^^^^^^^^
     |
-301 |     let string = arena.str_to_list("hello");
-    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_string`
-
-warning: unused variable: `nil_idx`
-   --> tests/test5.rs:264:9
+note: an implementation of `PartialEq` might be missing for `StringId`
+   --> src/lib.rs:13:1
     |
-264 |     let nil_idx = nil.raw().0 as usize;
-    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_nil_idx`
+ 13 | pub struct StringId(pub u8);
+    | ^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `StringId` with `#[derive(PartialEq)]`
     |
-    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
-
-warning: unused variable: `env_idx`
-   --> tests/test5.rs:388:9
+ 13 + #[derive(PartialEq)]
+ 14 | pub struct StringId(pub u8);
     |
-388 |     let env_idx = env.raw().0 as usize;
-    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_env_idx`
 
-warning: `ruthe` (test "test4") generated 3 warnings (run `cargo fix --test "test4" -p ruthe` to apply 3 suggestions)
-warning: `ruthe` (test "test5") generated 2 warnings (run `cargo fix --test "test5" -p ruthe` to apply 2 suggestions)
-warning: `ruthe` (lib test) generated 12 warnings (12 duplicates)
-warning: unused variable: `code`
-   --> tests/test3.rs:137:9
+error[E0594]: cannot assign to `self.data[_]`, which is behind a `&` reference
+  --> src/lib.rs:79:13
+   |
+79 |             self.data[pos + i] = b;
+   |             ^^^^^^^^^^^^^^^^^^^^^^ `self` is a `&` reference, so it cannot be written to
+   |
+help: consider changing this to be a mutable reference
+   |
+43 |     pub fn intern(&mut self, s: &str) -> Result<StringId, ErrorCode> {
+   |                    +++
+
+error[E0594]: cannot assign to `self.strings[_]`, which is behind a `&` reference
+  --> src/lib.rs:83:9
+   |
+83 |         self.strings[next] = (pos as u16, bytes.len() as u16);
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `self` is a `&` reference, so it cannot be written to
+   |
+help: consider changing this to be a mutable reference
+   |
+43 |     pub fn intern(&mut self, s: &str) -> Result<StringId, ErrorCode> {
+   |                    +++
+
+warning: value assigned to `stack_len` is never read
+   --> src/lib.rs:270:29
     |
-137 |     let code = r#"
-    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_code`
+270 |         let mut stack_len = 0;
+    |                             ^
     |
-    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
 
-warning: unused variable: `code`
-   --> tests/test3.rs:187:9
-    |
-187 |     let code = r#"
-    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_code`
-
-warning: unused variable: `code`
-   --> tests/test3.rs:244:9
-    |
-244 |     let code = r#"
-    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_code`
-
-warning: unused variable: `code`
-   --> tests/test3.rs:271:9
-    |
-271 |     let code = r#"
-    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_code`
-
-warning: unused variable: `code`
-   --> tests/test3.rs:320:9
-    |
-320 |     let code = r#"
-    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_code`
-
-warning: unused variable: `val3`
-   --> tests/test3.rs:553:17
-    |
-553 |             let val3 = val2.clone();
-    |                 ^^^^ help: if this is intentional, prefix it with an underscore: `_val3`
-
-warning: unused variable: `refs`
-    --> tests/test3.rs:1700:9
-     |
-1700 |     let refs: Vec<_> = refs
-     |         ^^^^ help: if this is intentional, prefix it with an underscore: `_refs`
-
-warning: unused variable: `idx`
-    --> tests/test3.rs:1731:9
-     |
-1731 |     let idx = num.raw().0 as usize;
-     |         ^^^ help: if this is intentional, prefix it with an underscore: `_idx`
-
+Some errors have detailed explanations: E0277, E0369, E0594.
+For more information about an error, try `rustc --explain E0277`.
+warning: `ruthe` (lib) generated 1 warning
+error: could not compile `ruthe` (lib) due to 4 previous errors; 1 warning emitted
