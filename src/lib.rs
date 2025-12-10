@@ -10,13 +10,13 @@ use core::ops::Deref;
 pub const ARENA_SIZE: usize = 10000;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct ArenaRef(pub u32);
+pub struct ArenaRef(pub usize);
 
 impl ArenaRef {
-    pub const NULL: ArenaRef = ArenaRef(u32::MAX);
+    pub const NULL: ArenaRef = ArenaRef(usize::MAX);
 
     pub fn is_null(self) -> bool {
-        self.0 == u32::MAX
+        self.0 == usize::MAX
     }
 }
 
@@ -36,7 +36,7 @@ pub enum Value {
 #[derive(Debug)]
 pub struct Arena {
     pub values: [Cell<Value>; ARENA_SIZE],
-    pub refcounts: [Cell<u32>; ARENA_SIZE],
+    pub refcounts: [Cell<usize>; ARENA_SIZE],
     pub next_free: Cell<usize>,
 }
 
@@ -58,7 +58,7 @@ impl Arena {
                 self.values[idx].set(value);
                 self.refcounts[idx].set(1);
                 self.next_free.set((idx + 1) % ARENA_SIZE);
-                return ArenaRef(idx as u32);
+                return ArenaRef(idx as usize);
             }
         }
 
@@ -84,7 +84,7 @@ impl Arena {
         let idx = r.0 as usize;
         if !matches!(self.values[idx].get(), Value::Free) {
             let rc = self.refcounts[idx].get();
-            if rc < u32::MAX {
+            if rc < usize::MAX {
                 self.refcounts[idx].set(rc + 1);
             }
         }

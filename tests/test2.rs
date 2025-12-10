@@ -6,7 +6,7 @@ use std::vec::Vec;
 // Test Helpers
 // ============================================================================
 
-fn assert_refcount(arena: &Arena, r: ArenaRef, expected: u32) {
+fn assert_refcount(arena: &Arena, r: ArenaRef, expected: usize) {
     let idx = r.0 as usize;
     let actual = arena.refcounts[idx].get();
     assert!(
@@ -367,13 +367,13 @@ fn test_refcount_overflow_protection() {
     let num = arena.number(100);
     let raw = *num;
 
-    arena.refcounts[raw.0 as usize].set(u32::MAX - 1);
+    arena.refcounts[raw.0 as usize].set(usize::MAX - 1);
 
     arena.incref(raw);
-    assert_refcount(&arena, raw, u32::MAX);
+    assert_refcount(&arena, raw, usize::MAX);
 
     arena.incref(raw);
-    assert_refcount(&arena, raw, u32::MAX);
+    assert_refcount(&arena, raw, usize::MAX);
 }
 
 #[test]
