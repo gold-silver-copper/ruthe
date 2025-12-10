@@ -84,7 +84,7 @@ fn benchmark_expression(name: &str, expr: &str, iterations: usize) {
     let mut times = Vec::with_capacity(iterations);
 
     for _ in 0..iterations {
-        let arena = Arena::<5000>::new();
+        let arena = Arena::<10000>::new();
         let env = match env_new(&arena) {
             Ok(e) => e,
             Err(_) => return,
@@ -222,7 +222,7 @@ fn main() {
 
     // Closure tests - need shared arena
     {
-        let arena = Arena::<5000>::new();
+        let arena = Arena::<10000>::new();
         let env = match env_new(&arena) {
             Ok(e) => e,
             Err(e) => {
@@ -265,7 +265,7 @@ fn main() {
     println!("└─────────────────────────────────────────────────────────────┘\n");
 
     // Use shared arena for define-based tests
-    let arena = Arena::<5000>::new();
+    let arena = Arena::<10000>::new();
     let env = match env_new(&arena) {
         Ok(e) => e,
         Err(e) => {
@@ -385,8 +385,8 @@ fn main() {
     if let Err(e) = sum_list_result {
         println!("ERROR defining sum-list: {}", e.message());
     } else {
-        let mut times = Vec::with_capacity(5000);
-        for _ in 0..5000 {
+        let mut times = Vec::with_capacity(10000);
+        for _ in 0..10000 {
             let start = Instant::now();
             let result = eval_string(&arena, "(sum-list '(1 2 3 4 5) 0)", &env);
             let duration = start.elapsed();
@@ -432,7 +432,7 @@ fn main() {
         println!("ERROR defining countdown: {}", e.message());
     } else {
         println!("--- Countdown (Tail Recursion) ---");
-        for size in [1000, 5000, 100000] {
+        for size in [1000, 10000, 100000] {
             match benchmark_single(
                 &arena,
                 &format!("countdown({})", size),
@@ -463,7 +463,7 @@ fn main() {
         println!("ERROR defining sum-tail: {}", e.message());
     } else {
         println!("--- Sum with Tail Recursion ---");
-        for n in [100, 1000, 5000] {
+        for n in [100, 1000, 10000] {
             match benchmark_single(
                 &arena,
                 &format!("sum-tail({})", n),
@@ -500,7 +500,7 @@ fn main() {
     if let Err(e) = map_result {
         println!("ERROR defining map: {}", e.message());
     } else {
-        let mut times = Vec::with_capacity(5000);
+        let mut times = Vec::with_capacity(10000);
         for _ in 0..10000 {
             let start = Instant::now();
             let result = eval_string(&arena, "(map (lambda (x) (* x x)) '(1 2 3 4 5))", &env);
@@ -541,8 +541,8 @@ fn main() {
     if let Err(e) = filter_result {
         println!("ERROR defining filter: {}", e.message());
     } else {
-        let mut times = Vec::with_capacity(5000);
-        for _ in 0..5000 {
+        let mut times = Vec::with_capacity(10000);
+        for _ in 0..10000 {
             let start = Instant::now();
             let result = eval_string(
                 &arena,
@@ -710,7 +710,7 @@ fn main() {
     println!("│ 12. PERFORMANCE SCALING ANALYSIS                            │");
     println!("└─────────────────────────────────────────────────────────────┘\n");
 
-    let arena2 = Arena::<5000>::new();
+    let arena2 = Arena::<10000>::new();
     let env2 = match env_new(&arena2) {
         Ok(e) => e,
         Err(e) => {
@@ -781,7 +781,7 @@ fn main() {
     println!("{}", "-".repeat(50));
 
     last_duration = 0;
-    for n in [1000, 5000, 50000, 50000] {
+    for n in [1000, 10000, 50000, 100000] {
         let start = Instant::now();
         let result = eval_string(&arena2, &format!("(countdown {} 0)", n), &env2);
         let duration = start.elapsed().as_nanos();

@@ -1693,7 +1693,7 @@ fn test_mutual_tail_recursion_even_odd() {
 #[test]
 fn test_repeated_define_memory_churn() {
     // PASSES - repeated defines don't cause excessive allocations (bug fixed)
-    const SMALL_ARENA: usize = 5000;
+    const SMALL_ARENA: usize = 500;
     let arena = Arena::<SMALL_ARENA>::new();
     let env = env_new(&arena).unwrap();
 

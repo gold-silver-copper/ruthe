@@ -1265,7 +1265,7 @@ fn test_shared_structure_refcounting() {
 
 #[test]
 fn test_environment_refcounting() -> Result<(), ErrorCode> {
-    let arena = Arena::<5000>::new();
+    let arena = Arena::<500>::new();
     let env = env_new(&arena)?;
 
     let name = arena.str_to_list("x")?;
@@ -1291,7 +1291,7 @@ fn test_environment_refcounting() -> Result<(), ErrorCode> {
 
 #[test]
 fn test_environment_update_refcounting() -> Result<(), ErrorCode> {
-    let arena = Arena::<5000>::new();
+    let arena = Arena::<500>::new();
     let env = env_new(&arena)?;
     let name = arena.str_to_list("x")?;
 
