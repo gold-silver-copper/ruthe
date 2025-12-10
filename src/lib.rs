@@ -647,19 +647,6 @@ const BUILTIN_APPEND: u8 = 13;
 const BUILTIN_REVERSE: u8 = 14;
 // Wave 2 Builtins: Quality of Life Improvements
 
-// Add to your builtin constants:
-const BUILTIN_NOT: u8 = 15;
-const BUILTIN_NUMBER_Q: u8 = 16;
-const BUILTIN_PAIR_Q: u8 = 17;
-const BUILTIN_SYMBOL_Q: u8 = 18;
-const BUILTIN_PROCEDURE_Q: u8 = 19;
-const BUILTIN_EQ_Q: u8 = 20; // eq? for identity comparison
-const BUILTIN_EQUAL_Q: u8 = 21; // equal? for deep equality
-const BUILTIN_MAP: u8 = 22;
-const BUILTIN_FILTER: u8 = 23;
-const BUILTIN_FOLDL: u8 = 24; // fold-left
-const BUILTIN_DISPLAY: u8 = 25;
-const BUILTIN_NEWLINE: u8 = 26;
 const BUILTIN_LTE: u8 = 27; // <=
 const BUILTIN_GTE: u8 = 28; // >=
 const BUILTIN_MIN: u8 = 29;
@@ -953,17 +940,6 @@ fn call_builtin<'arena, const N: usize>(
         BUILTIN_FOLDL => builtin_foldl(arena, args),
         BUILTIN_DISPLAY => builtin_display(arena, args),
         BUILTIN_NEWLINE => builtin_newline(arena, args),
-        BUILTIN_ABS => builtin_abs(arena, args),
-        BUILTIN_LTE => builtin_lte(arena, args),
-        BUILTIN_GTE => builtin_gte(arena, args),
-        BUILTIN_MIN => builtin_min(arena, args),
-        BUILTIN_MAX => builtin_max(arena, args),
-        BUILTIN_MODULO => builtin_modulo(arena, args),
-        BUILTIN_QUOTIENT => builtin_quotient(arena, args),
-        BUILTIN_ZERO_Q => builtin_zero_q(arena, args),
-        BUILTIN_POSITIVE_Q => builtin_positive_q(arena, args),
-        BUILTIN_NEGATIVE_Q => builtin_negative_q(arena, args),
-
         _ => Err(ErrorCode::UnknownBuiltin),
     }
 }
@@ -1277,6 +1253,23 @@ fn builtin_reverse<'arena, const N: usize>(
     let list = arena.list_nth(args, 0).unwrap();
     arena.reverse_list(&list)
 }
+// ============================================================================
+// TIER 1: Essential Builtins (Add These First!)
+// ============================================================================
+
+// Add to your builtin constants:
+const BUILTIN_NOT: u8 = 15;
+const BUILTIN_NUMBER_Q: u8 = 16;
+const BUILTIN_PAIR_Q: u8 = 17;
+const BUILTIN_SYMBOL_Q: u8 = 18;
+const BUILTIN_PROCEDURE_Q: u8 = 19;
+const BUILTIN_EQ_Q: u8 = 20; // eq? for identity comparison
+const BUILTIN_EQUAL_Q: u8 = 21; // equal? for deep equality
+const BUILTIN_MAP: u8 = 22;
+const BUILTIN_FILTER: u8 = 23;
+const BUILTIN_FOLDL: u8 = 24; // fold-left
+const BUILTIN_DISPLAY: u8 = 25;
+const BUILTIN_NEWLINE: u8 = 26;
 
 // ============================================================================
 // Type Predicates - Essential for type checking

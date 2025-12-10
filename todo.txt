@@ -1,5 +1,0 @@
-String optimizations
-
-Figure out nil vs empty list stuff
-
-
