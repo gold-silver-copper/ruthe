@@ -7,7 +7,7 @@ const ARENA_SIZE: usize = DEFAULT_ARENA_SIZE;
 // Test Helpers
 // ============================================================================
 
-fn assert_refcount<const N: usize>(arena: &Arena<N>, r: ArenaRef, expected: u32) {
+fn assert_refcount<const N: usize>(arena: &Arena<N>, r: ArenaRef, expected: u16) {
     let idx = r.0 as usize;
     let actual = arena.refcounts[idx].get();
     assert!(
@@ -368,13 +368,13 @@ fn test_refcount_overflow_protection() {
     let num = arena.number(100).unwrap();
     let raw = num.raw();
 
-    arena.refcounts[raw.0 as usize].set(u32::MAX - 1);
+    arena.refcounts[raw.0 as usize].set(u16::MAX - 1);
 
     arena.incref(raw);
-    assert_refcount(&arena, raw, u32::MAX);
+    assert_refcount(&arena, raw, u16::MAX);
 
     arena.incref(raw);
-    assert_refcount(&arena, raw, u32::MAX);
+    assert_refcount(&arena, raw, u16::MAX);
 }
 
 #[test]

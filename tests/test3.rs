@@ -1000,13 +1000,13 @@ fn test_refcount_overflow_protection() {
     let val = arena.number(42).unwrap();
     let idx = val.raw().0 as usize;
 
-    arena.refcounts[idx].set(u32::MAX - 1);
+    arena.refcounts[idx].set(u16::MAX - 1);
 
     arena.incref(val.raw());
-    assert_eq!(arena.refcounts[idx].get(), u32::MAX);
+    assert_eq!(arena.refcounts[idx].get(), u16::MAX);
 
     arena.incref(val.raw());
-    assert_eq!(arena.refcounts[idx].get(), u32::MAX);
+    assert_eq!(arena.refcounts[idx].get(), u16::MAX);
 }
 
 // ============================================================================
