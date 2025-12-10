@@ -1,392 +1,256 @@
+warning: value assigned to `stack_len` is never read
+  --> src/lib.rs:99:29
+   |
+99 |         let mut stack_len = 0;
+   |                             ^
+   |
+   = help: maybe it is overwritten before being read?
+   = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:166:16
+    |
+166 |     pub fn nil(&self) -> Ref<N> {
+    |                ^^^^^     ^^^^^^ the same lifetime is hidden here
+    |                |
+    |                the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+166 |     pub fn nil(&self) -> Ref<'_, N> {
+    |                              +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:170:19
+    |
+170 |     pub fn number(&self, n: i64) -> Ref<N> {
+    |                   ^^^^^             ^^^^^^ the same lifetime is hidden here
+    |                   |
+    |                   the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+170 |     pub fn number(&self, n: i64) -> Ref<'_, N> {
+    |                                         +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:174:21
+    |
+174 |     pub fn bool_val(&self, b: bool) -> Ref<N> {
+    |                     ^^^^^              ^^^^^^ the same lifetime is hidden here
+    |                     |
+    |                     the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+174 |     pub fn bool_val(&self, b: bool) -> Ref<'_, N> {
+    |                                            +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:178:21
+    |
+178 |     pub fn char_val(&self, c: char) -> Ref<N> {
+    |                     ^^^^^              ^^^^^^ the same lifetime is hidden here
+    |                     |
+    |                     the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+178 |     pub fn char_val(&self, c: char) -> Ref<'_, N> {
+    |                                            +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:182:17
+    |
+182 |     pub fn cons(&self, car: &Ref<N>, cdr: &Ref<N>) -> Ref<N> {
+    |                 ^^^^^ the lifetime is elided here     ^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+182 |     pub fn cons(&self, car: &Ref<N>, cdr: &Ref<N>) -> Ref<'_, N> {
+    |                                                           +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:188:19
+    |
+188 |     pub fn symbol(&self, s: &Ref<N>) -> Ref<N> {
+    |                   ^^^^^                 ^^^^^^ the same lifetime is hidden here
+    |                   |
+    |                   the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+188 |     pub fn symbol(&self, s: &Ref<N>) -> Ref<'_, N> {
+    |                                             +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:193:19
+    |
+193 |     pub fn lambda(&self, params: &Ref<N>, body: &Ref<N>, env: &Ref<N>) -> Ref<N> {
+    |                   ^^^^^ the lifetime is elided here                       ^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+193 |     pub fn lambda(&self, params: &Ref<N>, body: &Ref<N>, env: &Ref<N>) -> Ref<'_, N> {
+    |                                                                               +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:203:20
+    |
+203 |     pub fn builtin(&self, idx: u8) -> Ref<N> {
+    |                    ^^^^^              ^^^^^^ the same lifetime is hidden here
+    |                    |
+    |                    the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+203 |     pub fn builtin(&self, idx: u8) -> Ref<'_, N> {
+    |                                           +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:275:24
+    |
+275 |     pub fn str_to_list(&self, s: &str) -> Ref<N> {
+    |                        ^^^^^              ^^^^^^ the same lifetime is hidden here
+    |                        |
+    |                        the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+275 |     pub fn str_to_list(&self, s: &str) -> Ref<'_, N> {
+    |                                               +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:341:21
+    |
+341 |     pub fn list_nth(&self, list: &Ref<N>, n: usize) -> Option<Ref<N>> {
+    |                     ^^^^^ the lifetime is elided here         ^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+341 |     pub fn list_nth(&self, list: &Ref<N>, n: usize) -> Option<Ref<'_, N>> {
+    |                                                                   +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/lib.rs:358:25
+    |
+358 |     pub fn reverse_list(&self, list: &Ref<N>) -> Ref<N> {
+    |                         ^^^^^                    ^^^^^^ the same lifetime is hidden here
+    |                         |
+    |                         the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+358 |     pub fn reverse_list(&self, list: &Ref<N>) -> Ref<'_, N> {
+    |                                                      +++
+
+warning: `ruthe` (lib) generated 12 warnings (run `cargo fix --lib -p ruthe` to apply 11 suggestions)
+warning: unused variable: `num2`
+   --> tests/test2.rs:109:13
+    |
+109 |         let num2 = num.clone();
+    |             ^^^^ help: if this is intentional, prefix it with an underscore: `_num2`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ruthe` (test "test2") generated 1 warning (run `cargo fix --test "test2" -p ruthe` to apply 1 suggestion)
    Compiling ruthe v0.1.0 (/Users/kisaczka/Desktop/code/ruthe)
-error[E0106]: missing lifetime specifier
-   --> src/lib.rs:374:81
+warning: unused variable: `used_before`
+   --> tests/test4.rs:144:9
     |
-374 | pub fn env_with_parent<const N: usize>(arena: &Arena<N>, parent: &Ref<N>) -> Ref<N> {
-    |                                               ---------          -------        ^ expected named lifetime parameter
+144 |     let used_before = (0..2000)
+    |         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_used_before`
     |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `parent`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-374 | pub fn env_with_parent<'a, const N: usize>(arena: &'a Arena<N>, parent: &'a Ref<'a, N>) -> Ref<'a, N> {
-    |                        +++                         ++                    ++     +++            +++
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
-error[E0106]: missing lifetime specifier
-   --> src/lib.rs:392:92
+warning: unused variable: `refs`
+   --> tests/test4.rs:269:9
     |
-392 | pub fn env_get<const N: usize>(arena: &Arena<N>, env: &Ref<N>, name: &Ref<N>) -> Option<Ref<N>> {
-    |                                       ---------       -------        -------               ^ expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena`, one of `env`'s 2 lifetimes, or one of `name`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-392 | pub fn env_get<'a, const N: usize>(arena: &'a Arena<N>, env: &'a Ref<'a, N>, name: &'a Ref<'a, N>) -> Option<Ref<'a, N>> {
-    |                +++                         ++                 ++     +++            ++     +++                   +++
+269 |     let refs: Vec<_> = refs
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_refs`
 
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:449:16
+warning: unused variable: `string`
+   --> tests/test4.rs:301:9
     |
-446 |     arena: &Arena<N>,
-    |            ---------
-447 |     idx: u8,
-448 |     args: &Ref<N>,
-    |           -------
-449 | ) -> Result<Ref<N>, Ref<N>> {
-    |                ^       ^ expected named lifetime parameter
-    |                |
-    |                expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-445 ~ fn call_builtin<'a, const N: usize>(
-446 ~     arena: &'a Arena<N>,
-447 |     idx: u8,
-448 ~     args: &'a Ref<'a, N>,
-449 ~ ) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |
+301 |     let string = arena.str_to_list("hello");
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_string`
 
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:470:78
+warning: unused variable: `nil_idx`
+   --> tests/test5.rs:264:9
     |
-470 | fn builtin_add<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                       ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                              |
-    |                                                                              expected named lifetime parameter
+264 |     let nil_idx = nil.raw().0 as usize;
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_nil_idx`
     |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-470 | fn builtin_add<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |                +++                         ++                  ++     +++                   +++         +++
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:494:78
+warning: unused variable: `env_idx`
+   --> tests/test5.rs:388:9
     |
-494 | fn builtin_sub<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                       ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                              |
-    |                                                                              expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-494 | fn builtin_sub<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |                +++                         ++                  ++     +++                   +++         +++
+388 |     let env_idx = env.raw().0 as usize;
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_env_idx`
 
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:538:78
+warning: `ruthe` (test "test4") generated 3 warnings (run `cargo fix --test "test4" -p ruthe` to apply 3 suggestions)
+warning: `ruthe` (test "test5") generated 2 warnings (run `cargo fix --test "test5" -p ruthe` to apply 2 suggestions)
+warning: `ruthe` (lib test) generated 12 warnings (12 duplicates)
+warning: unused variable: `code`
+   --> tests/test3.rs:137:9
     |
-538 | fn builtin_mul<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                       ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                              |
-    |                                                                              expected named lifetime parameter
+137 |     let code = r#"
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_code`
     |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-538 | fn builtin_mul<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |                +++                         ++                  ++     +++                   +++         +++
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:562:78
+warning: unused variable: `code`
+   --> tests/test3.rs:187:9
     |
-562 | fn builtin_div<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                       ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                              |
-    |                                                                              expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-562 | fn builtin_div<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |                +++                         ++                  ++     +++                   +++         +++
+187 |     let code = r#"
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_code`
 
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:604:77
+warning: unused variable: `code`
+   --> tests/test3.rs:244:9
     |
-604 | fn builtin_eq<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                      ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                             |
-    |                                                                             expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-604 | fn builtin_eq<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |               +++                         ++                  ++     +++                   +++         +++
+244 |     let code = r#"
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_code`
 
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:619:77
+warning: unused variable: `code`
+   --> tests/test3.rs:271:9
     |
-619 | fn builtin_lt<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                      ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                             |
-    |                                                                             expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-619 | fn builtin_lt<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |               +++                         ++                  ++     +++                   +++         +++
+271 |     let code = r#"
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_code`
 
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:634:77
+warning: unused variable: `code`
+   --> tests/test3.rs:320:9
     |
-634 | fn builtin_gt<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                      ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                             |
-    |                                                                             expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-634 | fn builtin_gt<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |               +++                         ++                  ++     +++                   +++         +++
+320 |     let code = r#"
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_code`
 
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:649:78
+warning: unused variable: `val3`
+   --> tests/test3.rs:553:17
     |
-649 | fn builtin_car<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                       ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                              |
-    |                                                                              expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-649 | fn builtin_car<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |                +++                         ++                  ++     +++                   +++         +++
+553 |             let val3 = val2.clone();
+    |                 ^^^^ help: if this is intentional, prefix it with an underscore: `_val3`
 
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:661:78
-    |
-661 | fn builtin_cdr<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                       ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                              |
-    |                                                                              expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-661 | fn builtin_cdr<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |                +++                         ++                  ++     +++                   +++         +++
-
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:673:82
-    |
-673 | fn builtin_cons_fn<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                           ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                                  |
-    |                                                                                  expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-673 | fn builtin_cons_fn<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |                    +++                         ++                  ++     +++                   +++         +++
-
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:682:80
-    |
-682 | fn builtin_list<const N: usize>(_arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                         ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                                |
-    |                                                                                expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `_arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-682 | fn builtin_list<'a, const N: usize>(_arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |                 +++                          ++                  ++     +++                   +++         +++
-
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:686:79
-    |
-686 | fn builtin_null<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                        ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                               |
-    |                                                                               expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-686 | fn builtin_null<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |                 +++                         ++                  ++     +++                   +++         +++
-
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:695:81
-    |
-695 | fn builtin_length<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                          ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                                 |
-    |                                                                                 expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-695 | fn builtin_length<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |                   +++                         ++                  ++     +++                   +++         +++
-
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:704:81
-    |
-704 | fn builtin_append<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                          ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                                 |
-    |                                                                                 expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-704 | fn builtin_append<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |                   +++                         ++                  ++     +++                   +++         +++
-
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:735:82
-    |
-735 | fn builtin_reverse<const N: usize>(arena: &Arena<N>, args: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                           ---------        -------               ^       ^ expected named lifetime parameter
-    |                                                                                  |
-    |                                                                                  expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `args`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-735 | fn builtin_reverse<'a, const N: usize>(arena: &'a Arena<N>, args: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |                    +++                         ++                  ++     +++                   +++         +++
-
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:777:77
-    |
-777 | pub fn tokenize<const N: usize>(arena: &Arena<N>, input: &str) -> Result<Ref<N>, Ref<N>> {
-    |                                        ---------         ----               ^       ^ expected named lifetime parameter
-    |                                                                             |
-    |                                                                             expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or `input`
-help: consider introducing a named lifetime parameter
-    |
-777 | pub fn tokenize<'a, const N: usize>(arena: &'a Arena<N>, input: &'a str) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |                 +++                         ++                   ++                    +++         +++
-
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:899:78
-    |
-899 | pub fn parse<const N: usize>(arena: &Arena<N>, tokens: &Ref<N>) -> Result<Ref<N>, Ref<N>> {
-    |                                     ---------          -------               ^       ^ expected named lifetime parameter
-    |                                                                              |
-    |                                                                              expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `tokens`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-899 | pub fn parse<'a, const N: usize>(arena: &'a Arena<N>, tokens: &'a Ref<'a, N>) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |              +++                         ++                    ++     +++                   +++         +++
-
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:910:17
-    |
-908 |     arena: &Arena<N>,
-    |            ---------
-909 |     tokens: &Ref<N>,
-    |             -------
-910 | ) -> Result<(Ref<N>, Ref<N>), Ref<N>> {
-    |                 ^       ^        ^ expected named lifetime parameter
-    |                 |       |
-    |                 |       expected named lifetime parameter
-    |                 expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `tokens`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-907 ~ fn parse_one<'a, const N: usize>(
-908 ~     arena: &'a Arena<N>,
-909 ~     tokens: &'a Ref<'a, N>,
-910 ~ ) -> Result<(Ref<'a, N>, Ref<'a, N>), Ref<'a, N>> {
-    |
-
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:951:17
-    |
-949 |     arena: &Arena<N>,
-    |            ---------
-950 |     tokens: &Ref<N>,
-    |             -------
-951 | ) -> Result<(Ref<N>, Ref<N>), Ref<N>> {
-    |                 ^       ^        ^ expected named lifetime parameter
-    |                 |       |
-    |                 |       expected named lifetime parameter
-    |                 expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena` or one of `tokens`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-948 ~ fn parse_list<'a, const N: usize>(
-949 ~     arena: &'a Arena<N>,
-950 ~     tokens: &'a Ref<'a, N>,
-951 ~ ) -> Result<(Ref<'a, N>, Ref<'a, N>), Ref<'a, N>> {
-    |
-
-error[E0106]: missing lifetime specifiers
-   --> src/lib.rs:986:16
-    |
-983 |     arena: &Arena<N>,
-    |            ---------
-984 |     expr: &Ref<N>,
-    |           -------
-985 |     env: &Ref<N>,
-    |          -------
-986 | ) -> Result<Ref<N>, Ref<N>> {
-    |                ^       ^ expected named lifetime parameter
-    |                |
-    |                expected named lifetime parameter
-    |
-    = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena`, one of `expr`'s 2 lifetimes, or one of `env`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-    |
-982 ~ pub fn eval<'a, const N: usize>(
-983 ~     arena: &'a Arena<N>,
-984 ~     expr: &'a Ref<'a, N>,
-985 ~     env: &'a Ref<'a, N>,
-986 ~ ) -> Result<Ref<'a, N>, Ref<'a, N>> {
-    |
-
-error[E0106]: missing lifetime specifiers
-    --> src/lib.rs:1213:16
+warning: unused variable: `refs`
+    --> tests/test3.rs:1700:9
      |
-1210 |     arena: &Arena<N>,
-     |            ---------
-1211 |     input: &str,
-     |            ----
-1212 |     env: &Ref<N>,
-     |          -------
-1213 | ) -> Result<Ref<N>, Ref<N>> {
-     |                ^       ^ expected named lifetime parameter
-     |                |
-     |                expected named lifetime parameter
-     |
-     = help: this function's return type contains a borrowed value, but the signature does not say whether it is borrowed from `arena`, `input`, or one of `env`'s 2 lifetimes
-help: consider introducing a named lifetime parameter
-     |
-1209 ~ pub fn eval_string<'a, const N: usize>(
-1210 ~     arena: &'a Arena<N>,
-1211 ~     input: &'a str,
-1212 ~     env: &'a Ref<'a, N>,
-1213 ~ ) -> Result<Ref<'a, N>, Ref<'a, N>> {
-     |
+1700 |     let refs: Vec<_> = refs
+     |         ^^^^ help: if this is intentional, prefix it with an underscore: `_refs`
 
-warning: unused import: `core::marker::PhantomData`
- --> src/lib.rs:4:5
-  |
-4 | use core::marker::PhantomData;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+warning: unused variable: `idx`
+    --> tests/test3.rs:1731:9
+     |
+1731 |     let idx = num.raw().0 as usize;
+     |         ^^^ help: if this is intentional, prefix it with an underscore: `_idx`
 
-For more information about this error, try `rustc --explain E0106`.
-warning: `ruthe` (lib) generated 1 warning (1 duplicate)
-error: could not compile `ruthe` (lib) due to 24 previous errors; 1 warning emitted
-warning: build failed, waiting for other jobs to finish...
-warning: `ruthe` (lib test) generated 1 warning
-error: could not compile `ruthe` (lib test) due to 24 previous errors; 1 warning emitted

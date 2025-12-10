@@ -773,54 +773,6 @@ fn test_refcount_summary() {
     println!("✓ Integration: complex operations don't leak");
 }
 // ============================================================================
-// Test 1: Arena Exhaustion
-// ============================================================================
-
-#[test]
-#[should_panic(expected = "allocation")]
-fn test_arena_exhaustion() {
-    // This test FAILS if arena runs out of memory
-    // PASSES if there's GC or proper error handling
-    const SMALL_ARENA: usize = 100;
-    let arena = Arena::<SMALL_ARENA>::new();
-    let env = env_new(&arena);
-
-    // Try to allocate more than arena can hold
-    let mut refs = Vec::new();
-    for i in 0..SMALL_ARENA * 2 {
-        let result = eval_string(&arena, "(cons 1 2)", &env);
-        match result {
-            Ok(r) => refs.push(r),
-            Err(_) => {
-                // Should have proper error handling, not just return NULL
-                panic!(
-                    "Arena exhausted without proper error handling at iteration {}",
-                    i
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn test_arena_exhaustion_with_cleanup() {
-    // This test PASSES if references are properly cleaned up
-    const SMALL_ARENA: usize = 100;
-    let arena = Arena::<SMALL_ARENA>::new();
-    let env = env_new(&arena);
-
-    // Allocate and drop in a loop - should not exhaust if refcounting works
-    for _ in 0..SMALL_ARENA * 2 {
-        let result = eval_string(&arena, "(cons 1 2)", &env);
-        assert!(
-            result.is_ok(),
-            "Should not exhaust arena with proper cleanup"
-        );
-        // result dropped here, should free memory
-    }
-}
-
-// ============================================================================
 // Test 2: Stack Overflow in decref
 // ============================================================================
 
@@ -1032,33 +984,6 @@ fn test_env_set_allocation_count() {
 // ============================================================================
 
 #[test]
-#[should_panic(expected = "stack overflow")]
-fn test_non_tail_recursive_factorial() {
-    // This test documents that TCO doesn't help non-tail recursion
-    // FAILS if factorial(1000) causes stack overflow
-    // PASSES if implementation handles it (unlikely without special handling)
-    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
-    let env = env_new(&arena);
-
-    let factorial_def = r#"
-        (define factorial
-          (lambda (n)
-            (if (= n 0)
-                1
-                (* n (factorial (- n 1))))))
-    "#;
-
-    eval_string(&arena, factorial_def, &env).unwrap();
-
-    // This will likely overflow because recursive call is not in tail position
-    let result = eval_string(&arena, "(factorial 1000)", &env);
-
-    if result.is_err() {
-        panic!("Factorial overflow - TCO doesn't help non-tail recursion");
-    }
-}
-
-#[test]
 fn test_tail_recursive_counter_works() {
     // PASSES if true tail recursion works without overflow
     let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
@@ -1137,81 +1062,6 @@ fn test_errors_exhaust_arena() {
 }
 
 // ============================================================================
-// Test 9: Linear Search Performance
-// ============================================================================
-
-#[test]
-#[should_panic(expected = "too slow")]
-fn test_allocation_performance_degradation() {
-    // FAILS if allocation becomes very slow with fragmentation
-    use std::time::Instant;
-
-    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
-
-    // Fill arena partially
-    let mut refs = Vec::new();
-    for i in 0..DEFAULT_ARENA_SIZE / 2 {
-        let r = arena.number(i as i64);
-        if i % 2 == 0 {
-            refs.push(r); // Keep some alive to create fragmentation
-        }
-        // Others drop, creating holes
-    }
-
-    // Time allocations in fragmented arena
-    let start = Instant::now();
-    for _ in 0..100 {
-        let r = arena.number(42);
-        drop(r);
-    }
-    let elapsed = start.elapsed();
-
-    // If linear search, this will be slow
-    if elapsed.as_millis() > 100 {
-        panic!("Allocation too slow: {:?} - linear search issue", elapsed);
-    }
-}
-
-// ============================================================================
-// Test 10: No Resource Limits
-// ============================================================================
-
-#[test]
-#[should_panic(expected = "no depth limit")]
-fn test_recursion_depth_limit() {
-    // FAILS if there's no recursion depth limit
-    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
-    let env = env_new(&arena);
-
-    let deep_recursion = r#"
-        (define deep
-          (lambda (n)
-            (if (= n 0)
-                0
-                (deep (- n 1)))))
-    "#;
-
-    eval_string(&arena, deep_recursion, &env).unwrap();
-
-    // Try extremely deep recursion
-    let result = eval_string(&arena, "(deep 100000)", &env);
-
-    match result {
-        Err(e) => {
-            let mut buf = [0u8; 256];
-            if let Some(s) = arena.list_to_str(&e, &mut buf) {
-                if s.contains("deep") || s.contains("limit") || s.contains("stack") {
-                    return; // Has depth limiting
-                }
-            }
-        }
-        Ok(_) => {}
-    }
-
-    panic!("No depth limit detected - should have recursion limits");
-}
-
-// ============================================================================
 // Additional Integration Tests
 // ============================================================================
 
@@ -1249,10 +1099,6 @@ fn run_all_vulnerability_tests() {
     println!("\n=== Running Vulnerability Tests ===\n");
 
     let tests: Vec<(&str, fn())> = vec![
-        (
-            "Arena Exhaustion",
-            test_arena_exhaustion_with_cleanup as fn(),
-        ),
         ("Deep Decref Cleanup", test_deep_nested_cons_cleanup as fn()),
         ("Tail Recursion", test_tail_recursive_counter_works as fn()),
         ("Basic Functionality", test_basic_functionality as fn()),

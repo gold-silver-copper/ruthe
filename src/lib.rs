@@ -438,6 +438,48 @@ pub fn env_set<'arena, const N: usize>(
     }
 }
 
+pub fn env_update<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    env: &Ref<'arena, N>,
+    name: &Ref<'arena, N>,
+    value: &Ref<'arena, N>,
+) -> Result<(), ()> {
+    let mut current_env = env.clone();
+    loop {
+        match arena.get(current_env.inner) {
+            Some(Value::Cons(bindings, parent)) => {
+                let mut bindings_list = Ref::new(arena, bindings);
+                loop {
+                    match arena.get(bindings_list.inner) {
+                        Some(Value::Cons(binding, rest)) => {
+                            if let Some(Value::Cons(key, _old_value)) = arena.get(binding) {
+                                if let Some(Value::Symbol(s)) = arena.get(key) {
+                                    let key_sym = Ref::new(arena, s);
+                                    if arena.str_eq(&key_sym, name) {
+                                        // Found it! Update the binding in place
+                                        let key_ref = Ref::new(arena, key);
+                                        let binding_ref = Ref::new(arena, binding);
+                                        arena.set_cons(&binding_ref, &key_ref, value);
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                            bindings_list = Ref::new(arena, rest);
+                        }
+                        _ => break,
+                    }
+                }
+
+                match arena.get(parent) {
+                    Some(Value::Nil) => return Err(()), // Not found
+                    _ => current_env = Ref::new(arena, parent),
+                }
+            }
+            _ => return Err(()),
+        }
+    }
+}
+
 // Helper function to remove a binding from the binding list
 fn remove_binding<'arena, const N: usize>(
     arena: &'arena Arena<N>,
@@ -1185,6 +1227,12 @@ fn eval_step<'arena, const N: usize>(
                         "define" => {
                             return eval_define(arena, expr, env);
                         }
+                        "set!" => {
+                            return eval_set(arena, expr, env);
+                        }
+                        "begin" => {
+                            return eval_begin(arena, expr, env);
+                        }
                         _ => {}
                     }
                 }
@@ -1232,14 +1280,95 @@ fn eval_lambda<'arena, const N: usize>(
     expr: &Ref<'arena, N>,
     env: &Ref<'arena, N>,
 ) -> Result<EvalResult<'arena, N>, Ref<'arena, N>> {
-    if arena.list_len(expr) != 3 {
-        return Err(arena.str_to_list("lambda requires 2 args"));
+    let len = arena.list_len(expr);
+    if len < 3 {
+        return Err(arena.str_to_list("lambda requires params and body"));
     }
 
     let params = arena.list_nth(expr, 1).unwrap();
-    let body = arena.list_nth(expr, 2).unwrap();
+
+    // If there's only one body expression, use it directly
+    // Otherwise, wrap multiple body expressions in a begin
+    let body = if len == 3 {
+        arena.list_nth(expr, 2).unwrap()
+    } else {
+        // Multiple body expressions - wrap in begin
+        let begin_sym = arena.str_to_list("begin");
+        let begin_symbol = arena.symbol(&begin_sym);
+
+        // Collect all body expressions (skip 'lambda' and params)
+        let mut body_exprs = arena.nil();
+        let mut current = expr.clone();
+
+        // Skip lambda keyword and params
+        if let Some(Value::Cons(_, rest1)) = arena.get(current.inner) {
+            if let Some(Value::Cons(_, rest2)) = arena.get(rest1) {
+                current = Ref::new(arena, rest2);
+            }
+        }
+
+        // Collect body expressions
+        loop {
+            match arena.get(current.inner) {
+                Some(Value::Cons(car, cdr)) => {
+                    let car_ref = Ref::new(arena, car);
+                    body_exprs = arena.cons(&car_ref, &body_exprs);
+                    current = Ref::new(arena, cdr);
+                }
+                _ => break,
+            }
+        }
+
+        body_exprs = arena.reverse_list(&body_exprs);
+        arena.cons(&begin_symbol, &body_exprs)
+    };
 
     Ok(EvalResult::Done(arena.lambda(&params, &body, env)))
+}
+
+fn eval_begin<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    expr: &Ref<'arena, N>,
+    env: &Ref<'arena, N>,
+) -> Result<EvalResult<'arena, N>, Ref<'arena, N>> {
+    let len = arena.list_len(expr);
+    if len < 2 {
+        return Err(arena.str_to_list("begin requires at least 1 expression"));
+    }
+
+    // Skip the 'begin' symbol
+    let mut current = if let Some(Value::Cons(_, cdr)) = arena.get(expr.inner) {
+        Ref::new(arena, cdr)
+    } else {
+        return Err(arena.str_to_list("Invalid begin"));
+    };
+
+    let mut result = arena.nil();
+
+    loop {
+        match arena.get(current.inner) {
+            Some(Value::Cons(car, cdr)) => {
+                let car_ref = Ref::new(arena, car);
+
+                // Check if this is the last expression
+                let is_last = matches!(arena.get(cdr), Some(Value::Nil));
+
+                if is_last {
+                    // Tail call the last expression
+                    return Ok(EvalResult::TailCall(car_ref, env.clone()));
+                } else {
+                    // Evaluate non-last expressions for side effects
+                    result = eval(arena, &car_ref, env)?;
+                    current = Ref::new(arena, cdr);
+                }
+            }
+            Some(Value::Nil) => {
+                // Empty begin or already handled
+                return Ok(EvalResult::Done(result));
+            }
+            _ => return Err(arena.str_to_list("Invalid begin")),
+        }
+    }
 }
 
 fn eval_define<'arena, const N: usize>(
@@ -1262,6 +1391,31 @@ fn eval_define<'arena, const N: usize>(
     let value = eval(arena, &value_expr, env)?;
 
     env_set(arena, env, &name_sym, &value);
+    Ok(EvalResult::Done(value))
+}
+
+fn eval_set<'arena, const N: usize>(
+    arena: &'arena Arena<N>,
+    expr: &Ref<'arena, N>,
+    env: &Ref<'arena, N>,
+) -> Result<EvalResult<'arena, N>, Ref<'arena, N>> {
+    if arena.list_len(expr) != 3 {
+        return Err(arena.str_to_list("set! requires 2 args"));
+    }
+
+    let name = arena.list_nth(expr, 1).unwrap();
+    let name_sym = if let Some(Value::Symbol(s)) = arena.get(name.inner) {
+        Ref::new(arena, s)
+    } else {
+        return Err(arena.str_to_list("set! needs symbol"));
+    };
+
+    let value_expr = arena.list_nth(expr, 2).unwrap();
+    let value = eval(arena, &value_expr, env)?;
+
+    env_update(arena, env, &name_sym, &value)
+        .map_err(|_| arena.str_to_list("Unbound variable in set!"))?;
+
     Ok(EvalResult::Done(value))
 }
 
@@ -1397,6 +1551,50 @@ pub fn run_example() -> Result<(), ()> {
     if let Ok(val) = result {
         if let Some(Value::Number(n)) = arena.get(val.inner) {
             if n != 120 {
+                return Err(());
+            }
+        }
+    }
+
+    // Test: set! for mutation
+    let _ = eval_string(&arena, "(define counter 0)", &env);
+    let _ = eval_string(&arena, "(set! counter 42)", &env);
+    let result = eval_string(&arena, "counter", &env);
+    if let Ok(val) = result {
+        if let Some(Value::Number(n)) = arena.get(val.inner) {
+            if n != 42 {
+                return Err(());
+            }
+        }
+    }
+
+    // Test: set! should fail on unbound variable
+    let result = eval_string(&arena, "(set! nonexistent 123)", &env);
+    if result.is_ok() {
+        return Err(()); // Should have failed
+    }
+
+    // Test: begin with multiple expressions
+    let result = eval_string(&arena, "(begin 1 2 3)", &env);
+    if let Ok(val) = result {
+        if let Some(Value::Number(n)) = arena.get(val.inner) {
+            if n != 3 {
+                return Err(());
+            }
+        }
+    }
+
+    // Test: lambda with multiple body expressions
+    let _ = eval_string(&arena, "(define x 0)", &env);
+    let _ = eval_string(
+        &arena,
+        "(define inc-twice (lambda () (set! x (+ x 1)) (set! x (+ x 1)) x))",
+        &env,
+    );
+    let result = eval_string(&arena, "(inc-twice)", &env);
+    if let Ok(val) = result {
+        if let Some(Value::Number(n)) = arena.get(val.inner) {
+            if n != 2 {
                 return Err(());
             }
         }

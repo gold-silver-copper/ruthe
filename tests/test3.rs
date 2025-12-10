@@ -29,6 +29,384 @@
 
 use ruthe::*;
 
+#[test]
+fn test_set_basic_mutation() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Define a variable
+    let _ = eval_string(&arena, "(define x 10)", &env).unwrap();
+    
+    // Verify initial value
+    let result = eval_string(&arena, "x", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(10))));
+    
+    // Mutate with set!
+    let _ = eval_string(&arena, "(set! x 20)", &env).unwrap();
+    
+    // Verify mutated value
+    let result = eval_string(&arena, "x", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(20))));
+}
+
+#[test]
+fn test_set_returns_new_value() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    let _ = eval_string(&arena, "(define x 5)", &env).unwrap();
+    
+    // set! should return the new value
+    let result = eval_string(&arena, "(set! x 42)", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(42))));
+}
+
+#[test]
+fn test_set_unbound_variable_fails() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Try to set! an undefined variable
+    let result = eval_string(&arena, "(set! undefined 123)", &env);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_set_multiple_mutations() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    let _ = eval_string(&arena, "(define counter 0)", &env).unwrap();
+    
+    // Multiple mutations
+    let _ = eval_string(&arena, "(set! counter 1)", &env).unwrap();
+    let _ = eval_string(&arena, "(set! counter 2)", &env).unwrap();
+    let _ = eval_string(&arena, "(set! counter 3)", &env).unwrap();
+    
+    let result = eval_string(&arena, "counter", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(3))));
+}
+
+#[test]
+fn test_set_with_expression() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    let _ = eval_string(&arena, "(define x 10)", &env).unwrap();
+    
+    // set! with computed value
+    let _ = eval_string(&arena, "(set! x (+ x 5))", &env).unwrap();
+    
+    let result = eval_string(&arena, "x", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(15))));
+}
+
+#[test]
+fn test_set_in_lambda_closure() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Create a counter with closure
+    let counter_def = r#"
+        (define make-counter
+          (lambda (init)
+            (lambda ()
+              (set! init (+ init 1))
+              init)))
+    "#;
+    let _ = eval_string(&arena, counter_def, &env).unwrap();
+    let _ = eval_string(&arena, "(define counter (make-counter 0))", &env).unwrap();
+    
+    // Call counter multiple times
+    let result1 = eval_string(&arena, "(counter)", &env).unwrap();
+    assert!(matches!(arena.get(result1.inner), Some(Value::Number(1))));
+    
+    let result2 = eval_string(&arena, "(counter)", &env).unwrap();
+    assert!(matches!(arena.get(result2.inner), Some(Value::Number(2))));
+    
+    let result3 = eval_string(&arena, "(counter)", &env).unwrap();
+    assert!(matches!(arena.get(result3.inner), Some(Value::Number(3))));
+}
+
+#[test]
+fn test_set_parent_scope() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Define in outer scope, mutate in inner scope
+    let code = r#"
+        (define x 100)
+        (define mutate-x
+          (lambda (new-val)
+            (set! x new-val)))
+        (mutate-x 200)
+        x
+    "#;
+    
+    let _ = eval_string(&arena, "(define x 100)", &env).unwrap();
+    let _ = eval_string(&arena, "(define mutate-x (lambda (new-val) (set! x new-val)))", &env).unwrap();
+    let _ = eval_string(&arena, "(mutate-x 200)", &env).unwrap();
+    let result = eval_string(&arena, "x", &env).unwrap();
+    
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(200))));
+}
+
+#[test]
+fn test_set_vs_define_shadowing() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Outer x
+    let _ = eval_string(&arena, "(define x 10)", &env).unwrap();
+    
+    // Lambda that defines a local x (shadowing), then tries to set! it
+    let code = r#"
+        (define test
+          (lambda ()
+            (define x 20)
+            (set! x 30)
+            x))
+    "#;
+    let _ = eval_string(&arena, code, &env).unwrap();
+    
+    // Inner x should be 30
+    let result = eval_string(&arena, "(test)", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(30))));
+    
+    // Outer x should still be 10
+    let result = eval_string(&arena, "x", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(10))));
+}
+
+#[test]
+fn test_set_finds_first_binding_in_chain() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Create nested scopes with same variable
+    let code = r#"
+        (define x 1)
+        (define outer
+          (lambda ()
+            (define x 2)
+            (define inner
+              (lambda ()
+                (set! x 99)))
+            (inner)
+            x))
+        (outer)
+    "#;
+    
+    let _ = eval_string(&arena, "(define x 1)", &env).unwrap();
+    let _ = eval_string(&arena, 
+        "(define outer (lambda () (define x 2) (define inner (lambda () (set! x 99))) (inner) x))",
+        &env).unwrap();
+    
+    // set! should modify the closest x (in outer lambda)
+    let result = eval_string(&arena, "(outer)", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(99))));
+    
+    // Global x should be unchanged
+    let result = eval_string(&arena, "x", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(1))));
+}
+
+#[test]
+fn test_set_with_boolean() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    let _ = eval_string(&arena, "(define flag #t)", &env).unwrap();
+    let _ = eval_string(&arena, "(set! flag #f)", &env).unwrap();
+    
+    let result = eval_string(&arena, "flag", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Bool(false))));
+}
+
+#[test]
+fn test_set_with_list() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    let _ = eval_string(&arena, "(define lst (list 1 2 3))", &env).unwrap();
+    let _ = eval_string(&arena, "(set! lst (list 4 5 6))", &env).unwrap();
+    
+    let result = eval_string(&arena, "(car lst)", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(4))));
+}
+
+#[test]
+fn test_set_accumulator_pattern() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Classic accumulator pattern
+    let code = r#"
+        (define sum 0)
+        (define add-to-sum
+          (lambda (n)
+            (set! sum (+ sum n))
+            sum))
+    "#;
+    
+    let _ = eval_string(&arena, "(define sum 0)", &env).unwrap();
+    let _ = eval_string(&arena, "(define add-to-sum (lambda (n) (set! sum (+ sum n)) sum))", &env).unwrap();
+    
+    let r1 = eval_string(&arena, "(add-to-sum 5)", &env).unwrap();
+    assert!(matches!(arena.get(r1.inner), Some(Value::Number(5))));
+    
+    let r2 = eval_string(&arena, "(add-to-sum 10)", &env).unwrap();
+    assert!(matches!(arena.get(r2.inner), Some(Value::Number(15))));
+    
+    let r3 = eval_string(&arena, "(add-to-sum 7)", &env).unwrap();
+    assert!(matches!(arena.get(r3.inner), Some(Value::Number(22))));
+}
+#[test]
+fn test_set_factorial_with_mutation2() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Test multiple mutations in sequence
+    let _ = eval_string(&arena, "(define result 1)", &env).unwrap();
+    let _ = eval_string(&arena, "(define n 5)", &env).unwrap();
+    
+    // Manually do factorial iterations
+    let _ = eval_string(&arena, "(set! result (* result n))", &env).unwrap(); // 5
+    let _ = eval_string(&arena, "(set! n (- n 1))", &env).unwrap();
+    let _ = eval_string(&arena, "(set! result (* result n))", &env).unwrap(); // 20
+    let _ = eval_string(&arena, "(set! n (- n 1))", &env).unwrap();
+    let _ = eval_string(&arena, "(set! result (* result n))", &env).unwrap(); // 60
+    let _ = eval_string(&arena, "(set! n (- n 1))", &env).unwrap();
+    let _ = eval_string(&arena, "(set! result (* result n))", &env).unwrap(); // 120
+    
+    let result = eval_string(&arena, "result", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(120))));
+}
+#[test]
+fn test_set_swap_pattern() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Swap two variables
+    let _ = eval_string(&arena, "(define a 10)", &env).unwrap();
+    let _ = eval_string(&arena, "(define b 20)", &env).unwrap();
+    let _ = eval_string(&arena, "(define temp a)", &env).unwrap();
+    let _ = eval_string(&arena, "(set! a b)", &env).unwrap();
+    let _ = eval_string(&arena, "(set! b temp)", &env).unwrap();
+    
+    let result_a = eval_string(&arena, "a", &env).unwrap();
+    assert!(matches!(arena.get(result_a.inner), Some(Value::Number(20))));
+    
+    let result_b = eval_string(&arena, "b", &env).unwrap();
+    assert!(matches!(arena.get(result_b.inner), Some(Value::Number(10))));
+}
+
+#[test]
+fn test_set_in_recursive_function() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Function that counts recursive calls
+    let code = r#"
+        (define call-count 0)
+        (define counting-factorial
+          (lambda (n)
+            (set! call-count (+ call-count 1))
+            (if (= n 0)
+                1
+                (* n (counting-factorial (- n 1))))))
+    "#;
+    
+    let _ = eval_string(&arena, "(define call-count 0)", &env).unwrap();
+    let _ = eval_string(&arena, 
+        "(define counting-factorial (lambda (n) (set! call-count (+ call-count 1)) (if (= n 0) 1 (* n (counting-factorial (- n 1))))))",
+        &env).unwrap();
+    
+    let _ = eval_string(&arena, "(counting-factorial 5)", &env).unwrap();
+    
+    // Should have been called 6 times (5, 4, 3, 2, 1, 0)
+    let result = eval_string(&arena, "call-count", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(6))));
+}
+
+#[test]
+fn test_set_wrong_arg_count() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    let _ = eval_string(&arena, "(define x 1)", &env).unwrap();
+    
+    // Too few args
+    let result = eval_string(&arena, "(set! x)", &env);
+    assert!(result.is_err());
+    
+    // Too many args
+    let result = eval_string(&arena, "(set! x 1 2)", &env);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_set_requires_symbol() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Try to set! a non-symbol
+    let result = eval_string(&arena, "(set! 123 456)", &env);
+    assert!(result.is_err());
+    
+    let result = eval_string(&arena, "(set! (+ 1 2) 10)", &env);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_set_with_lambda_value() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    let _ = eval_string(&arena, "(define func (lambda (x) x))", &env).unwrap();
+    let _ = eval_string(&arena, "(set! func (lambda (x) (* x 2)))", &env).unwrap();
+    
+    let result = eval_string(&arena, "(func 5)", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(10))));
+}
+
+#[test]
+fn test_set_multiple_variables_in_sequence() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    let _ = eval_string(&arena, "(define a 1)", &env).unwrap();
+    let _ = eval_string(&arena, "(define b 2)", &env).unwrap();
+    let _ = eval_string(&arena, "(define c 3)", &env).unwrap();
+    
+    let _ = eval_string(&arena, "(set! a 10)", &env).unwrap();
+    let _ = eval_string(&arena, "(set! b 20)", &env).unwrap();
+    let _ = eval_string(&arena, "(set! c 30)", &env).unwrap();
+    
+    let result = eval_string(&arena, "(+ a b c)", &env).unwrap();
+    assert!(matches!(arena.get(result.inner), Some(Value::Number(60))));
+}
+
+#[test]
+fn test_set_state_machine() {
+    let arena = Arena::<DEFAULT_ARENA_SIZE>::new();
+    let env = env_new(&arena);
+
+    // Simple state machine: off -> on -> off
+    let _ = eval_string(&arena, "(define state 0)", &env).unwrap();
+    let _ = eval_string(&arena, 
+        "(define toggle (lambda () (if (= state 0) (set! state 1) (set! state 0)) state))",
+        &env).unwrap();
+    
+    let r1 = eval_string(&arena, "(toggle)", &env).unwrap();
+    assert!(matches!(arena.get(r1.inner), Some(Value::Number(1))));
+    
+    let r2 = eval_string(&arena, "(toggle)", &env).unwrap();
+    assert!(matches!(arena.get(r2.inner), Some(Value::Number(0))));
+    
+    let r3 = eval_string(&arena, "(toggle)", &env).unwrap();
+    assert!(matches!(arena.get(r3.inner), Some(Value::Number(1))));
+}
 // ============================================================================
 // Basic Allocation and Deallocation Tests
 // ============================================================================
