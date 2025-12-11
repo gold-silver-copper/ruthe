@@ -131,50 +131,6 @@ pub fn list_len(&self, list: &Ref<N>) -> usize {
 
 ## 💾 Memory Optimizations
 
-### 5. **Pack Value Enum More Efficiently**
-
-Current size is likely 24+ bytes. With string interning:
-
-```rust
-#[derive(Clone, Copy)]
-pub enum Value {
-    Number(i64),        // 8 bytes
-    Bool(bool),         // 1 byte (but padded)
-    Cons(u16, u16),     // 4 bytes
-    Symbol(u8),         // 1 byte with interning
-    Lambda(u16, u16, u16), // 6 bytes
-    Builtin(u8),        // 1 byte
-    Nil,
-    Free(u16),          // Next in free list
-}
-```
-
-Could potentially be packed into 16 bytes with careful layout.
-
-### 6. **Eliminate Symbol Wrapper**
-
-Currently:
-```rust
-Value::Symbol(ArenaRef) -> Cons list of chars
-```
-
-Should be:
-```rust
-Value::Symbol(u8)  // Direct index into string table
-```
-
-This eliminates an entire layer of indirection.
-
-### 7. **Use Smaller Reference Counts for Common Cases**
-
-Most values have refcount 1-3. Consider:
-
-```rust
-pub struct CompactRefcount {
-    // 0-6: direct count, 7: overflow (check separate table)
-    count: u8,  // Only 3 bits needed for common case
-}
-```
 
 ## 📊 Expected Performance Improvements
 
